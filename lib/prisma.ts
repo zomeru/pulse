@@ -1,5 +1,5 @@
-import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "../generated/prisma";
+import { PrismaNeon } from "@prisma/adapter-neon";
 
 // Prisma 7 connects through a driver adapter. We pass the (pooled) Postgres
 // connection string to the pg adapter.
@@ -16,7 +16,7 @@ function createClient() {
   if (!connectionString) {
     throw new Error("DATABASE_URL is not set");
   }
-  const adapter = new PrismaPg({ connectionString });
+  const adapter = new PrismaNeon({ connectionString });
   return new PrismaClient({
     adapter,
     log:

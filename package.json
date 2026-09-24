@@ -9,11 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/adapter-neon": "^7.10.0",
     "@prisma/client": "^7.8.0",
     "mapbox-gl": "^3.24.0",
     "next": "16.2.7",
-    "pg": "^8.21.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -21,7 +20,6 @@
     "@tailwindcss/postcss": "^4",
     "@types/mapbox-gl": "^3.4.1",
     "@types/node": "^20",
-    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
