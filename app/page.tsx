@@ -76,18 +76,50 @@ export default function Home() {
   function startPeer(peerId: string, initiator: boolean) {
     const ps = new PeerSession(initiator, {
       onSignal: (type: DescType, payload: string) => {
-        void sendSignal(sessionId, peerId, type, payload);
+        if (peerRef.current === ps) {
+          void sendSignal(sessionId, peerId, type, payload);
+        }
       },
-      onChat: (text) => addMessage(false, text),
-      onControl: (ctrl) => handleControl(ctrl),
-      onRemoteStream: (stream) => setRemoteStream(stream),
+      onChat: (text) => {
+        if (peerRef.current === ps) addMessage(false, text);
+      },
+      onControl: (ctrl) => {
+        if (peerRef.current === ps) handleControl(ctrl);
+      },
+      onRemoteStream: (stream) => {
+        if (peerRef.current === ps) setRemoteStream(stream);
+      },
       onConnectionState: (state) => {
-        if (state === "failed") {
+        if (peerRef.current === ps && state === "failed") {
           teardown("Connection failed (network).");
         }
       },
       onChannelOpen: () => {
-        setConn({ kind: "connected", peerId });
+        if (peerRef.current === ps) {
+          setConn({ kind: "connected", peerId });
+        }
+      },
+      onChannelClose: () => {
+        if (peerRef.current !== ps) return;
+        const c = connRef.current;
+        if (
+          (c.kind === "connecting" || c.kind === "connected") &&
+          c.peerId === peerId
+        ) {
+          void sendSignal(sessionId, peerId, "end");
+          teardown("Connection closed.");
+        }
+      },
+      onChannelError: () => {
+        if (peerRef.current !== ps) return;
+        const c = connRef.current;
+        if (
+          (c.kind === "connecting" || c.kind === "connected") &&
+          c.peerId === peerId
+        ) {
+          void sendSignal(sessionId, peerId, "end");
+          teardown("Connection error.");
+        }
       },
     });
     peerRef.current = ps;
@@ -167,7 +199,10 @@ export default function Home() {
   function endConnection() {
     const c = connRef.current;
     if (c.kind === "connecting" || c.kind === "connected") {
-      void sendSignal(sessionId, c.peerId, "end");
+      void sendSignal(sessionId, c.peerId, "end")
+        .catch(() => {})
+        .finally(() => teardown());
+      return;
     }
     teardown();
   }
@@ -358,8 +393,13 @@ export default function Home() {
           connected={conn.kind === "connected"}
           videoBusy={video !== "none"}
           onSend={(text) => {
-            peerRef.current?.sendChat(text);
+            const sent = peerRef.current?.sendChat(text) ?? false;
+            if (!sent) {
+              showNotice("Message could not be sent.");
+              return false;
+            }
             addMessage(true, text);
+            return true;
           }}
           onStartVideo={startVideoRequest}
           onEnd={endConnection}

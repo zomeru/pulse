@@ -19,7 +19,7 @@ export default function ChatPanel({
   messages: ChatMessage[];
   connected: boolean;
   videoBusy: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean;
   onStartVideo: () => void;
   onEnd: () => void;
 }) {
@@ -34,8 +34,7 @@ export default function ChatPanel({
     e.preventDefault();
     const text = draft.trim();
     if (!text || !connected) return;
-    onSend(text);
-    setDraft("");
+    if (onSend(text)) setDraft("");
   }
 
   return (

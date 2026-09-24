@@ -12,6 +12,8 @@ interface PeerCallbacks {
   onRemoteStream: (stream: MediaStream | null) => void;
   onConnectionState: (state: RTCPeerConnectionState) => void;
   onChannelOpen: () => void;
+  onChannelClose: () => void;
+  onChannelError: () => void;
 }
 
 const ICE_CONFIG: RTCConfiguration = {
@@ -28,6 +30,7 @@ export class PeerSession {
   private closed = false;
   private readonly cb: PeerCallbacks;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private signalQueue: Promise<void> = Promise.resolve();
 
   constructor(initiator: boolean, cb: PeerCallbacks) {
     this.cb = cb;
@@ -73,6 +76,12 @@ export class PeerSession {
 
   private wireDataChannel(dc: RTCDataChannel) {
     dc.onopen = () => this.cb.onChannelOpen();
+    dc.onclose = () => {
+      if (!this.closed) this.cb.onChannelClose();
+    };
+    dc.onerror = () => {
+      if (!this.closed) this.cb.onChannelError();
+    };
     dc.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data as string);
@@ -85,7 +94,17 @@ export class PeerSession {
     };
   }
 
-  async handleSignal(type: DescType, payload: string) {
+  handleSignal(type: DescType, payload: string): Promise<void> {
+    const operation = this.signalQueue.then(() =>
+      this.handleSignalInternal(type, payload),
+    );
+    this.signalQueue = operation.catch(() => {});
+    return operation.catch(() => {
+      if (!this.closed) this.cb.onChannelError();
+    });
+  }
+
+  private async handleSignalInternal(type: DescType, payload: string) {
     if (this.closed) return;
     const data = JSON.parse(payload);
 
@@ -107,8 +126,8 @@ export class PeerSession {
     this.ignoreOffer = !this.polite && offerCollision;
     if (this.ignoreOffer) return;
 
-    await this.flushPendingCandidates();
     await this.pc.setRemoteDescription(desc);
+    await this.flushPendingCandidates();
     if (desc.type === "offer") {
       await this.pc.setLocalDescription();
       if (this.pc.localDescription) {
@@ -128,17 +147,25 @@ export class PeerSession {
     }
   }
 
-  sendChat(text: string) {
-    this.safeSend({ t: "msg", text });
+  sendChat(text: string): boolean {
+    const normalized = text.trim();
+    if (!normalized) return false;
+    return this.safeSend({ t: "chat", text: normalized });
   }
 
-  sendControl(ctrl: PeerControl) {
-    this.safeSend({ t: "ctrl", ctrl });
+  sendControl(ctrl: PeerControl): boolean {
+    return this.safeSend({ t: "ctrl", ctrl });
   }
 
-  private safeSend(obj: unknown) {
-    if (this.dc && this.dc.readyState === "open") {
+  private safeSend(obj: unknown): boolean {
+    if (this.closed || !this.dc || this.dc.readyState !== "open") {
+      return false;
+    }
+    try {
       this.dc.send(JSON.stringify(obj));
+      return true;
+    } catch {
+      return false;
     }
   }
 
