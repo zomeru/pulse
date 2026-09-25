@@ -22,6 +22,11 @@ import {
   isSignalType,
   isValidPayload,
 } from "@/lib/validate";
+import {
+  clientSubject,
+  enforceRateLimit,
+  SIGNAL_LIMITS,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,6 +101,17 @@ export async function POST(request: NextRequest) {
       return apiError(400, "invalid_payload");
     }
 
+    // Limit on the session when we have a usable token, on the address otherwise,
+    // so a flood cannot mint a fresh bucket by inventing a token.
+    const limit = await enforceRateLimit(
+      "signal:session",
+      isSessionToken(sessionToken) ? sessionToken : clientSubject(request),
+      isSessionToken(sessionToken)
+        ? SIGNAL_LIMITS.perSession
+        : SIGNAL_LIMITS.unauthenticated,
+    );
+    if (!limit.allowed) return limit.response;
+
     // 1. Identity: this token must own the row it is speaking for. A token that
     // is not even well-formed finds no row, so this one check covers "not ours",
     // "malformed" and "not a session at all".
@@ -106,9 +122,27 @@ export async function POST(request: NextRequest) {
     });
     if (!sender) return apiError(401, "unknown_session");
 
+    // A single connection cannot flood one mailbox. The connection token is a
+    // secret, so this bucket is only reachable by the two participants.
+    const perConnection = await enforceRateLimit(
+      "signal:connection",
+      connectionId,
+      SIGNAL_LIMITS.perConnection,
+    );
+    if (!perConnection.allowed) return perConnection.response;
+
     const signalType: SignalType = type;
 
     if (signalType === "request") {
+      // Asking is deliberately unhurried: a human cannot tap a dot faster than
+      // this, so a script cannot keep re-opening a stranger's prompt.
+      const cooldown = await enforceRateLimit(
+        "signal:request",
+        sessionToken as string,
+        SIGNAL_LIMITS.requestCooldown,
+      );
+      if (!cooldown.allowed) return cooldown.response;
+
       const terminalSignal = await prisma.signal.findFirst({
         where: { connectionId, type: { in: ["decline", "end"] } },
         select: { id: true },

@@ -15,6 +15,11 @@ import {
   isIncarnationId,
   isSessionId,
 } from "@/lib/validate";
+import {
+  clientSubject,
+  enforceRateLimit,
+  LEAVE_LIMITS,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,11 +55,29 @@ export async function POST(request: NextRequest) {
       return apiError(400, "invalid_connection");
     }
 
+    const limit = await enforceRateLimit(
+      "leave:session",
+      sessionToken,
+      LEAVE_LIMITS.perSession,
+    );
+    if (!limit.allowed) return limit.response;
+
     const presence = await prisma.presence.findFirst({
       where: { id, sessionToken },
       select: { connectionId: true, incarnationId: true },
     });
-    if (!presence) return apiError(401, "unknown_session");
+    if (!presence) {
+      // Nothing to clean up that this caller owns. Still charge the address, so
+      // walking ids one at a time costs the same as presenting one token.
+      const anonymous = await enforceRateLimit(
+        "leave:ip",
+        clientSubject(request),
+        LEAVE_LIMITS.unauthenticated,
+      );
+      return anonymous.allowed
+        ? apiError(401, "unknown_session")
+        : anonymous.response;
+    }
 
     // A delayed pagehide/unmount request must not delete a newer page or
     // connection that reused the same browser session id.

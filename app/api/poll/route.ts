@@ -18,6 +18,11 @@ import {
   isSessionId,
   parseAckList,
 } from "@/lib/validate";
+import {
+  clientSubject,
+  enforceRateLimit,
+  POLL_LIMITS,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,6 +56,18 @@ export async function GET(request: NextRequest) {
     }
     if (!isSessionToken(sessionToken)) return apiError(401, "unknown_session");
 
+    // A well-formed token is its own bucket, so a slow network or a second tab
+    // never costs a real user their heartbeat. A missing or malformed token is
+    // rejected above without touching the database at all, so an unauthenticated
+    // flood is charged to the address instead — below, once it has failed to
+    // authenticate.
+    const limit = await enforceRateLimit(
+      "poll:session",
+      sessionToken,
+      POLL_LIMITS.perSession,
+    );
+    if (!limit.allowed) return limit.response;
+
     const acknowledgedSignalIds = parseAckList(
       request.nextUrl.searchParams.get("ack"),
     ).slice(0, MAX_ACK_IDS);
@@ -64,7 +81,18 @@ export async function GET(request: NextRequest) {
       where: { id, sessionToken },
       data: { lastSeen: new Date(now) },
     });
-    if (heartbeat.count !== 1) return apiError(401, "unknown_session");
+    if (heartbeat.count !== 1) {
+      // A well-formed token that is not this row's. Charge the address too, so
+      // presenting a different one on every attempt buys nothing.
+      const anonymous = await enforceRateLimit(
+        "poll:ip",
+        clientSubject(request),
+        POLL_LIMITS.unauthenticated,
+      );
+      return anonymous.allowed
+        ? apiError(401, "unknown_session")
+        : anonymous.response;
+    }
 
     if (connectionId) {
       // Only a currently connected client may renew the active lease. A stale

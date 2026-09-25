@@ -15,6 +15,11 @@ import {
   isIncarnationId,
   isSessionId,
 } from "@/lib/validate";
+import {
+  clientSubject,
+  enforceRateLimit,
+  JOIN_LIMITS,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +38,23 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   return handleApi("join", async () => {
     if (!isSameOrigin(request)) return apiError(403, "cross_origin");
+
+    const perClient = await enforceRateLimit(
+      "join:ip",
+      clientSubject(request),
+      JOIN_LIMITS.perClient,
+    );
+    if (!perClient.allowed) return perClient.response;
+
+    // A presence row is broadcast to every poller, so join is the one endpoint
+    // where a flood costs *other* people something. This bucket is the circuit
+    // breaker for a flood spread across many addresses.
+    const global = await enforceRateLimit(
+      "join:all",
+      "global",
+      JOIN_LIMITS.global,
+    );
+    if (!global.allowed) return global.response;
 
     const body = await readJsonObject(request, MAX_JOIN_BODY_BYTES);
     if (!body.ok) return body.response;

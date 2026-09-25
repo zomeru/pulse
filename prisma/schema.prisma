@@ -53,3 +53,14 @@ model Signal {
   @@index([connectionId])
   @@index([createdAt])
 }
+
+// Abuse limits. Vercel has no shared memory between instances, so the limiter
+// is a table rather than a Map: every instance reads and writes the same rows.
+// Keys are salted hashes — a raw session token or IP address is never stored.
+model RateLimit {
+  key     String   @id // "<scope>:<sha256(subject) prefix>"
+  count   Int      @default(0)
+  resetAt DateTime // end of the current fixed window
+
+  @@index([resetAt])
+}
