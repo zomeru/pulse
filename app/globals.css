@@ -494,8 +494,6 @@
     background: transparent;
   }
 
-  /* Range input for message length is not used, but form controls should not
-     render a light-mode UA style against our dark surfaces. */
   input,
   textarea {
     caret-color: var(--color-signal);
@@ -504,18 +502,6 @@
   input::placeholder,
   textarea::placeholder {
     color: var(--color-ink-faint);
-  }
-
-  .pulse-sr {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
 }
 
@@ -545,24 +531,21 @@
   text-decoration: none;
 }
 
+/* Mapbox draws the compact "i" badge as an SVG on the button itself, so the
+   only thing to do is invert the whole thing: a light disc becomes a dark one
+   and the glyph inside stays legible. */
 .mapboxgl-ctrl-attrib-button {
   width: 22px !important;
   height: 22px !important;
-  border-radius: 6px;
-  background-color: color-mix(in oklab, var(--color-void) 82%, transparent) !important;
-  background-size: 13px !important;
-  opacity: 0.75;
-  transition: opacity 200ms var(--ease-out-expo);
-}
-
-/* Only the glyph is inverted: inverting the whole button would also flip our
-   own dark background straight back to white. */
-.mapboxgl-ctrl-attrib-button .mapboxgl-ctrl-icon {
-  filter: invert(1) opacity(0.85);
+  background-size: 20px !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  filter: invert(1) brightness(0.9) opacity(0.6);
+  transition: filter 200ms var(--ease-out-expo);
 }
 
 .mapboxgl-ctrl-attrib-button:hover {
-  opacity: 1 !important;
+  filter: invert(1) brightness(1) opacity(0.95);
 }
 
 .mapboxgl-ctrl-bottom-left .mapboxgl-ctrl-scale {
@@ -811,35 +794,8 @@
   }
 }
 
-@keyframes sheen {
-  0% {
-    transform: translateX(-120%);
-  }
-  100% {
-    transform: translateX(220%);
-  }
-}
-
 .animate-toast-in {
   animation: toast-in 320ms var(--ease-out-expo) both;
-}
-
-.pulse-sheen {
-  position: relative;
-  overflow: hidden;
-}
-
-.pulse-sheen::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    100deg,
-    transparent 20%,
-    color-mix(in oklab, var(--color-signal) 22%, transparent) 50%,
-    transparent 80%
-  );
-  animation: sheen 1.5s var(--ease-in-out-soft) infinite;
 }
 
 /* =========================================================================
