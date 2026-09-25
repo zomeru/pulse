@@ -127,7 +127,7 @@ export default function ChatPanel({
   const peek = compact && collapsed;
 
   return (
-    <div className="absolute inset-x-0 bottom-0 top-[var(--topbar-h)] z-20 overflow-hidden sm:left-auto sm:w-[26rem] sm:overflow-visible">
+    <div className="absolute inset-x-0 bottom-0 top-[calc(var(--topbar-h)+20px)] z-20 overflow-hidden sm:left-auto sm:w-[26rem] sm:overflow-visible">
       {/* Full conversation. Opaque on phones — a full-width translucent panel
           over the map makes both unreadable — glass once it is a side rail. */}
       <section
@@ -136,7 +136,7 @@ export default function ChatPanel({
         className={cn(
           "flex h-full w-full flex-col border-0 bg-[#060a13]",
           "transition-transform duration-[450ms]",
-          "sm:pulse-glass sm:border-l sm:rounded-bl-3xl",
+          "sm:pulse-glass sm:border-l sm:rounded-bl-3xl sm:rounded-tl-3xl",
           peek
             ? "pointer-events-none -translate-y-2 opacity-0"
             : "translate-y-0 opacity-100",
@@ -327,7 +327,7 @@ export default function ChatPanel({
               placeholder={connected ? "Say something…" : "Linking up…"}
               aria-label="Message"
               className={cn(
-                "max-h-[132px] min-h-11 flex-1 resize-none rounded-2xl border border-hairline-soft",
+                "pulse-scroll max-h-[132px] min-h-11 flex-1 resize-none rounded-2xl border border-hairline-soft",
                 "bg-white/[0.04] px-3.5 py-2.5 text-[0.9375rem] leading-6",
                 "transition-colors placeholder:text-ink-faint",
                 "focus:border-signal/45 focus:bg-white/[0.06] focus:outline-none",

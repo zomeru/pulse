@@ -494,6 +494,41 @@
     background: transparent;
   }
 
+  /* The composer grows to a cap and then has to scroll, and a platform-default
+     scrollbar in the middle of this UI is the one detail that made the panel
+     look unfinished. Same quiet treatment as the message list, a touch more
+     present because the composer is the thing you are actively using, and a
+     hair lighter so it never reads as a divider. */
+  textarea.pulse-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(163, 200, 235, 0.28) transparent;
+  }
+
+  textarea.pulse-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  textarea.pulse-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  textarea.pulse-scroll::-webkit-scrollbar-thumb {
+    background: rgba(163, 200, 235, 0.26);
+    border-radius: 9999px;
+    /* Keeps the pill off the rounded corner it sits against. */
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+
+  textarea.pulse-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(163, 200, 235, 0.5);
+    background-clip: padding-box;
+  }
+
+  textarea.pulse-scroll::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   input,
   textarea {
     caret-color: var(--color-signal);
