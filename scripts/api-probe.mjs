@@ -10,6 +10,14 @@ const BASE = args.find((arg) => !arg.startsWith("--")) ?? "http://localhost:3000
 // The abuse section needs the rate limiter; `--skip-abuse` runs the rest.
 const SKIP_ABUSE = args.includes("--skip-abuse");
 
+// Vercel overwrites x-forwarded-for, so this only means anything when the probe
+// runs against a local server — which is the only place it runs. It exists so
+// that (a) each run of this script is its own "client" and does not collide with
+// the previous run's join budget, and (b) the per-address limits can be tested
+// deliberately. 203.0.113.0/24 and 198.51.100.0/24 are the documentation ranges.
+const RUN_IP = `203.0.113.${1 + Math.floor(Math.random() * 250)}`;
+const ABUSE_IP = "198.51.100.7";
+
 // A well-formed but wrong session token: 43 base64url characters.
 const fakeToken = () => randomBytes(32).toString("base64url");
 
@@ -59,6 +67,7 @@ async function api(path, options = {}) {
   const response = await fetch(`${BASE}${path}`, {
     ...options,
     headers: {
+      "x-forwarded-for": RUN_IP,
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers ?? {}),
     },
@@ -80,7 +89,9 @@ async function join(lat = 51.5, lng = -0.12) {
   const id = uuid();
   const incarnationId = uuid();
   const result = await post("/api/join", { id, lat, lng, incarnationId });
-  if (result.status !== 200) throw new Error(`join failed: ${result.status}`);
+  if (result.status !== 200) {
+    throw new Error(`join failed: ${result.status} ${JSON.stringify(result.body)}`);
+  }
   return { id, incarnationId, token: result.body.sessionToken };
 }
 
@@ -272,23 +283,30 @@ section("signaling: no injection into somebody else's session");
   const connectionId = uuid();
   await signal(victim, stranger.id, "request", connectionId);
   await signal(stranger, victim.id, "accept", connectionId);
+  // Both sides heartbeat, so the reservation does not expire underneath the test.
+  await poll(victim);
+  await poll(stranger);
 
   const injectedOffer = await signal(attacker, victim.id, "offer", connectionId, "attacker-sdp");
   ok("non-participant cannot inject an offer", injectedOffer.status === 409, `got ${injectedOffer.status}`);
 
   const injectedEnd = await signal(attacker, stranger.id, "end", connectionId);
-  ok("non-participant cannot end a live connection", injectedEnd.status === 200 && injectedEnd.body.ignored);
+  ok("a non-participant's end is not treated as authoritative", injectedEnd.status === 200, `got ${injectedEnd.status}`);
 
   const victimInbox = await poll(victim);
   ok(
     "victim's mailbox has no attacker payload",
     !victimInbox.body?.signals?.some((s) => s.payload === "attacker-sdp"),
   );
+  ok(
+    "no end was written for the attacker's attempt",
+    !victimInbox.body?.signals?.some((s) => s.type === "end" && s.fromId === attacker.id),
+  );
 
-  const victimStillReserved = await poll(victim);
-  ok("victim is still connected", victimStillReserved.status === 200);
-  const reserved = victimStillReserved.body?.signals?.filter((s) => s.type === "end");
-  ok("no forged end for the victim", !reserved?.some((s) => s.connectionId === connectionId && s.fromId === attacker.id));
+  // The proof that the connection survived: only a participant can still get a
+  // message into it.
+  const stillLive = await signal(victim, stranger.id, "offer", connectionId, "v-sdp");
+  ok("the connection is still live afterwards", stillLive.status === 200, `got ${stillLive.status}`);
 
   // A participant CAN end it.
   const realEnd = await signal(victim, stranger.id, "end", connectionId);
@@ -510,14 +528,13 @@ if (SKIP_ABUSE) {
   const first = await signal(spammer, victim.id, "request", connectionId);
   ok("mailbox flood has a live connection to flood", first.status === 200 && !first.body.autoDeclined, JSON.stringify(first.body));
   let inboxFloodBlocked = 0;
-  for (let burst = 0; burst < 4; burst += 1) {
-    const results = await Promise.all(
-      Array.from({ length: 15 }, (_, i) =>
-        signal(spammer, victim.id, "ice", connectionId, JSON.stringify({ candidate: `c${burst}-${i}` })),
-      ),
-    );
-    inboxFloodBlocked += results.filter((r) => r.status === 429).length;
-  }
+  // One burst, so the whole flood lands inside a single rate-limit window.
+  const flood = await Promise.all(
+    Array.from({ length: 60 }, (_, i) =>
+      signal(spammer, victim.id, "ice", connectionId, JSON.stringify({ candidate: `c${i}` })),
+    ),
+  );
+  inboxFloodBlocked = flood.filter((r) => r.status === 429).length;
   ok("per-connection signalling limit bites", inboxFloodBlocked > 0, `${inboxFloodBlocked}/60 refused`);
 
   const inbox = await poll(victim);
@@ -547,12 +564,12 @@ if (SKIP_ABUSE) {
   ok("poll with a wrong token is 401", unauthStatus === 401, `got ${unauthStatus}`);
   ok("unauthenticated poll flood is rate limited", refused > 0, `${refused}/60 refused`);
 
-  // 4) join flood
+  // 4) join flood, from one address
   let joinRefused = 0;
   for (let burst = 0; burst < 3; burst += 1) {
     const results = await Promise.all(
       Array.from({ length: 30 }, () =>
-        post("/api/join", { id: uuid(), lat: 1, lng: 1, incarnationId: uuid() }),
+        post("/api/join", { id: uuid(), lat: 1, lng: 1, incarnationId: uuid() }, { "x-forwarded-for": ABUSE_IP }),
       ),
     );
     joinRefused += results.filter((r) => r.status === 429).length;
@@ -583,6 +600,35 @@ section("error responses leak nothing");
   }
   const bad = responses[0];
   ok("unknown session is 401 or 400, never 500", bad.status === 401 || bad.status === 400, `got ${bad.status}`);
+}
+
+// --- 9. Response headers -------------------------------------------------
+section("response hardening");
+{
+  const page = await fetch(BASE, { redirect: "manual" });
+  const csp = page.headers.get("content-security-policy") ?? "";
+  ok("page sends a content-security-policy", csp.length > 0);
+  ok("CSP forbids framing", csp.includes("frame-ancestors 'none'"));
+  ok("CSP forbids plugins and base-uri tricks", csp.includes("object-src 'none'") && csp.includes("base-uri 'none'"));
+  ok("CSP restricts form posts to us", csp.includes("form-action 'self'"));
+  ok(
+    "CSP allows the origins Mapbox GL needs and nothing else",
+    csp.includes("https://api.mapbox.com") && csp.includes("blob:") && !csp.includes("*;"),
+    csp.slice(0, 160),
+  );
+  ok("nosniff is set", page.headers.get("x-content-type-options") === "nosniff");
+  ok("frames are denied", page.headers.get("x-frame-options") === "DENY");
+  ok("no referrer leaves the app", page.headers.get("referrer-policy") === "no-referrer");
+  const perms = page.headers.get("permissions-policy") ?? "";
+  ok(
+    "camera, mic and location are same-origin only",
+    perms.includes("camera=(self)") && perms.includes("microphone=(self)") && perms.includes("geolocation=(self)"),
+    perms,
+  );
+  ok("framework is not advertised", !page.headers.get("x-powered-by"));
+
+  const apiResponse = await api(`/api/poll?id=${uuid()}`);
+  ok("api responses are not cacheable", apiResponse.headers.get("cache-control")?.includes("no-store"));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
