@@ -3,7 +3,10 @@ export type PeerControl =
   | "video-request"
   | "video-accept"
   | "video-decline"
-  | "video-end";
+  | "video-end"
+  // UI feedback only — a throttled "they are typing" signal, exchanged on the
+  // same data channel as chat. Never persisted, never seen by the server.
+  | "typing";
 
 interface PeerCallbacks {
   onSignal: (type: DescType, payload: string) => void;
