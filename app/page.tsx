@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import EntryGate from "./components/EntryGate";
 import WorldMap from "./components/WorldMap";
 import ConnectionPrompt from "./components/ConnectionPrompt";
+import RequestingCard from "./components/RequestingCard";
 import ChatPanel, { type ChatMessage } from "./components/ChatPanel";
 import VideoPanel from "./components/VideoPanel";
+import NoticeStack, { type Notice } from "./components/NoticeStack";
+import TopBar, { type FlowStage } from "./components/TopBar";
+import { useMediaQuery } from "./hooks/useMediaQuery";
+import { useVisualViewportVar } from "./hooks/useVisualViewport";
 import { join, leave, poll, sendSignal } from "@/lib/api";
 import { PeerSession, type DescType, type PeerControl } from "@/lib/webrtc";
 import { POLL_INTERVAL_MS, SIGNAL_TTL_MS } from "@/lib/presence";
@@ -30,6 +35,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const CONNECTION_TIMEOUT_MS = 30_000;
 const PEER_DISCONNECT_GRACE_MS = 10_000;
 const MISSING_PEER_GRACE_MS = POLL_INTERVAL_MS * 2;
+const VIDEO_REQUEST_TIMEOUT_MS = 30_000;
+const TYPING_TTL_MS = 3_200;
+const POLL_FAILURES_BEFORE_WARN = 3;
 
 function isActiveConnection(conn: Conn): conn is ActiveConn {
   return conn.kind !== "idle";
@@ -47,12 +55,18 @@ function matchesConnection(
 }
 
 export default function Home() {
+  useVisualViewportVar();
+  const compact = useMediaQuery("(max-width: 639px)");
+
   const [phase, setPhase] = useState<"gate" | "live">("gate");
   const [sessionId] = useState(() => crypto.randomUUID());
   const [incarnationId, setIncarnationId] = useState(() => crypto.randomUUID());
   const [peers, setPeers] = useState<PeerDot[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [sync, setSync] = useState<"live" | "reconnecting">("live");
+  const [peerTyping, setPeerTyping] = useState(false);
+  const [mediaError, setMediaError] = useState<"caller" | "callee" | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(
@@ -83,7 +97,10 @@ export default function Home() {
   const missingPeerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const peerDisconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const videoRequestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noticeSeq = useRef(0);
+  const pollFailures = useRef(0);
   const lifecycleVersion = useRef(0);
   const endedConnections = useRef(new Set<string>());
   const processedSignals = useRef(new Map<string, number>());
@@ -92,19 +109,20 @@ export default function Home() {
     new Set<ReturnType<typeof setTimeout>>(),
   );
 
-  function showNotice(text: string) {
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    setNotice(text);
-    noticeTimer.current = setTimeout(() => {
-      noticeTimer.current = null;
-      setNotice(null);
-    }, 3500);
+  const dismissNotice = useCallback((id: number) => {
+    setNotices((previous) => previous.filter((n) => n.id !== id));
+  }, []);
+
+  function showNotice(text: string, tone: "info" | "error" = "info") {
+    const id = noticeSeq.current++;
+    // Never stack more than three; the oldest one is the least relevant.
+    setNotices((previous) => [...previous.slice(-2), { id, text, tone }]);
   }
 
   function addMessage(mine: boolean, text: string) {
     setMessages((previous) => [
       ...previous,
-      { id: msgId.current++, mine, text },
+      { id: msgId.current++, mine, text, at: Date.now() },
     ]);
   }
 
@@ -150,6 +168,19 @@ export default function Home() {
     if (!peerDisconnectTimer.current) return;
     clearTimeout(peerDisconnectTimer.current);
     peerDisconnectTimer.current = null;
+  }
+
+  function clearVideoRequestTimer() {
+    if (!videoRequestTimer.current) return;
+    clearTimeout(videoRequestTimer.current);
+    videoRequestTimer.current = null;
+  }
+
+  function clearTypingTimer() {
+    if (!typingTimer.current) return;
+    clearTimeout(typingTimer.current);
+    typingTimer.current = null;
+    setPeerTyping(false);
   }
 
   function closePeer() {
@@ -227,6 +258,8 @@ export default function Home() {
     clearMissingPeerTimer();
     clearConnectionTimer();
     clearPeerDisconnectTimer();
+    clearVideoRequestTimer();
+    clearTypingTimer();
 
     // Clear the ref/state before closing WebRTC so synchronous close events
     // cannot re-enter this path or affect a later connection.
@@ -235,6 +268,7 @@ export default function Home() {
     setLocalStream(null);
     setRemoteStream(null);
     setVideo("none");
+    setMediaError(null);
     setMessages([]);
 
     if (signalType) {
@@ -323,11 +357,15 @@ export default function Home() {
     switch (ctrl) {
       case "video-request":
         if (videoRef.current === "none" && isActiveConnection(connRef.current)) {
+          // We are no longer the one waiting.
+          clearVideoRequestTimer();
+          setMediaError(null);
           setVideo("incoming");
         }
         break;
       case "video-accept":
         if (videoRef.current === "requesting" && expected) {
+          clearVideoRequestTimer();
           peer
             .startVideo()
             .then((stream) => {
@@ -341,22 +379,36 @@ export default function Home() {
             .catch(() => {
               if (!isCurrentPeer(peer, expected)) return;
               setVideo("none");
+              setMediaError("caller");
               peer.sendControl("video-end");
-              showNotice("Camera unavailable.");
             });
         }
         break;
       case "video-decline":
         if (videoRef.current === "requesting") {
+          clearVideoRequestTimer();
           setVideo("none");
-          showNotice("Video declined.");
+          showNotice("They'd rather keep it to text.");
+        } else if (videoRef.current === "incoming") {
+          // The requester withdrew the call.
+          setVideo("none");
         }
         break;
       case "video-end":
+        clearVideoRequestTimer();
         peer.stopVideo();
         setLocalStream(null);
         setRemoteStream(null);
+        setMediaError(null);
         setVideo("none");
+        break;
+      case "typing":
+        if (typingTimer.current) clearTimeout(typingTimer.current);
+        setPeerTyping(true);
+        typingTimer.current = setTimeout(() => {
+          typingTimer.current = null;
+          setPeerTyping(false);
+        }, TYPING_TTL_MS);
         break;
     }
   }
@@ -435,11 +487,30 @@ export default function Home() {
     const current = connRef.current;
     const peer = peerRef.current;
     if (current.kind !== "connected" || !peer) return;
+    clearVideoRequestTimer();
+    setMediaError(null);
     setVideo("requesting");
     if (!peer.sendControl("video-request")) {
       setVideo("none");
-      showNotice("Video could not start.");
+      showNotice("The call couldn't be started. Try again in a moment.", "error");
+      return;
     }
+    // Without this the UI would sit on "waiting" forever if the other side
+    // simply walked away. A withdrawn request is not a failed connection.
+    videoRequestTimer.current = setTimeout(() => {
+      videoRequestTimer.current = null;
+      if (videoRef.current !== "requesting") return;
+      peer.sendControl("video-decline");
+      setVideo("none");
+      showNotice("No answer on the call.");
+    }, VIDEO_REQUEST_TIMEOUT_MS);
+  }
+
+  function cancelVideoRequest() {
+    if (videoRef.current !== "requesting") return;
+    clearVideoRequestTimer();
+    peerRef.current?.sendControl("video-decline");
+    setVideo("none");
   }
 
   function acceptVideo() {
@@ -447,6 +518,7 @@ export default function Home() {
     const expected = currentConnectionRef();
     if (!peer || !expected || connRef.current.kind !== "connected") return;
 
+    setMediaError(null);
     peer
       .startVideo()
       .then((stream) => {
@@ -462,7 +534,7 @@ export default function Home() {
         if (!isCurrentPeer(peer, expected)) return;
         peer.sendControl("video-decline");
         setVideo("none");
-        showNotice("Camera unavailable.");
+        setMediaError("callee");
       });
   }
 
@@ -470,19 +542,27 @@ export default function Home() {
     const peer = peerRef.current;
     const expected = currentConnectionRef();
     if (!peer || !expected || !isCurrentPeer(peer, expected)) return;
+    clearVideoRequestTimer();
     peer.sendControl("video-decline");
     setVideo("none");
+    setMediaError(null);
   }
 
   function endVideo() {
     const peer = peerRef.current;
     const expected = currentConnectionRef();
     if (!peer || !expected || !isCurrentPeer(peer, expected)) return;
+    clearVideoRequestTimer();
     peer.stopVideo();
     peer.sendControl("video-end");
     setLocalStream(null);
     setRemoteStream(null);
+    setMediaError(null);
     setVideo("none");
+  }
+
+  function sendTyping() {
+    peerRef.current?.sendControl("typing");
   }
 
   function processSignal(signal: SignalMsg) {
@@ -674,7 +754,16 @@ export default function Home() {
         if (lifecycleVersion.current === observedVersion) {
           reconcileMissingPeerRef.current(data.peers, observedConnection);
         }
-      } catch {}
+        pollFailures.current = 0;
+        setSync("live");
+      } catch {
+        // The heartbeat is what keeps this dot on the map, so a run of failed
+        // polls is worth surfacing rather than swallowing silently.
+        pollFailures.current += 1;
+        if (pollFailures.current >= POLL_FAILURES_BEFORE_WARN) {
+          setSync("reconnecting");
+        }
+      }
       if (active) timer = setTimeout(tick, POLL_INTERVAL_MS);
     };
     tick();
@@ -734,8 +823,8 @@ export default function Home() {
       clearMissingPeerTimer();
       clearConnectionTimer();
       clearPeerDisconnectTimer();
+      clearVideoRequestTimer();
       clearTerminalTimers();
-      if (noticeTimer.current) clearTimeout(noticeTimer.current);
     };
   }, [sessionId, phase]);
 
@@ -753,38 +842,53 @@ export default function Home() {
 
   const inChat = conn.kind === "connecting" || conn.kind === "connected";
 
+  const stage: FlowStage =
+    conn.kind === "idle"
+      ? "explore"
+      : conn.kind === "connecting"
+        ? "link"
+        : conn.kind === "connected"
+          ? "talk"
+          : "request";
+
+  const mapTarget = isActiveConnection(conn)
+    ? {
+        peerId: conn.peerId,
+        state: conn.kind === "connected" ? ("linked" as const) : ("target" as const),
+      }
+    : null;
+
   return (
-    <main className="fixed inset-0 overflow-hidden">
+    <main className="fixed inset-x-0 top-0 h-[var(--app-vh)] overflow-hidden bg-void">
       <WorldMap
         peers={peers}
         me={myLocation}
+        target={mapTarget}
         onPeerClick={requestConnection}
         canConnect={conn.kind === "idle"}
       />
 
-      {notice && (
-        <div className="absolute left-1/2 top-20 z-30 -translate-x-1/2 rounded-full bg-zinc-800/90 px-4 py-2 text-sm text-zinc-100 shadow-lg backdrop-blur">
-          {notice}
-        </div>
-      )}
+      <TopBar
+        stage={stage}
+        incoming={conn.kind === "incoming"}
+        online={peers.length}
+        sync={sync}
+        compact={compact}
+      />
+
+      <NoticeStack notices={notices} onDismiss={dismissNotice} />
 
       {conn.kind === "requesting" && (
-        <div className="absolute left-1/2 top-20 z-30 flex -translate-x-1/2 items-center gap-3 rounded-full bg-zinc-800/90 px-4 py-2 text-sm text-zinc-100 shadow-lg backdrop-blur">
-          <span>Requesting connection…</span>
-          <button
-            onClick={cancelRequest}
-            className="rounded-full bg-zinc-700 px-3 py-1 text-xs hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-        </div>
+        <RequestingCard onCancel={cancelRequest} />
       )}
 
       {conn.kind === "incoming" && (
         <ConnectionPrompt
-          title="A stranger wants to connect"
-          acceptLabel="Accept"
-          declineLabel="Decline"
+          title="Someone wants to talk"
+          subtitle="They're a stranger, and you'll stay anonymous to each other."
+          detail="Chat and video go straight between the two of you."
+          acceptLabel="Connect"
+          declineLabel="Not now"
           onAccept={acceptIncoming}
           onDecline={declineIncoming}
         />
@@ -794,35 +898,48 @@ export default function Home() {
         <ChatPanel
           messages={messages}
           connected={conn.kind === "connected"}
-          videoBusy={video !== "none"}
+          videoRequested={video === "requesting"}
+          peerTyping={peerTyping}
+          compact={compact}
           onSend={(text) => {
             const sent = peerRef.current?.sendChat(text) ?? false;
             if (!sent) {
-              showNotice("Message could not be sent.");
+              showNotice("That message didn't make it. Try again.", "error");
               return false;
             }
             addMessage(true, text);
             return true;
           }}
+          onTyping={sendTyping}
           onStartVideo={startVideoRequest}
+          onCancelVideo={cancelVideoRequest}
           onEnd={endConnection}
         />
       )}
 
-      {video === "requesting" && (
-        <div className="absolute bottom-24 left-1/2 z-30 -translate-x-1/2 rounded-full bg-zinc-800/90 px-4 py-2 text-sm text-zinc-100 shadow-lg backdrop-blur">
-          Waiting for stranger to accept video…
-        </div>
-      )}
-
       {video === "incoming" && (
         <ConnectionPrompt
-          title="Start video call?"
-          subtitle="The stranger wants to turn on video."
-          acceptLabel="Accept"
-          declineLabel="Decline"
+          title="They'd like to turn on video"
+          subtitle="You'll see each other for as long as you both want."
+          detail="Never recorded, never stored."
+          tone="self"
+          acceptLabel="Join call"
+          declineLabel="Keep texting"
           onAccept={acceptVideo}
           onDecline={declineVideo}
+        />
+      )}
+
+      {mediaError && (
+        <ConnectionPrompt
+          title="We can't reach your camera"
+          subtitle="Your browser blocked camera or microphone access for this site."
+          detail="Allow it in the address bar, then try again — or stay here in text."
+          tone="alert"
+          acceptLabel="Try again"
+          declineLabel="Stay in text"
+          onAccept={mediaError === "callee" ? acceptVideo : startVideoRequest}
+          onDecline={() => setMediaError(null)}
         />
       )}
 
@@ -830,6 +947,7 @@ export default function Home() {
         <VideoPanel
           localStream={localStream}
           remoteStream={remoteStream}
+          connected={conn.kind === "connected"}
           onEnd={endVideo}
         />
       )}
