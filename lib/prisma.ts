@@ -19,10 +19,14 @@ function createClient() {
   const adapter = new PrismaNeon({ connectionString });
   return new PrismaClient({
     adapter,
+    // Prisma's query logging can print the failing invocation and its
+    // arguments. In this app those arguments are session ids, capability
+    // tokens and signalling payloads, so production logs nothing and the API
+    // routes log a route name and an error class instead (see lib/http.ts).
     log:
       process.env.NODE_ENV === "development"
         ? ["error", "warn"]
-        : ["error"],
+        : ([] as ("error" | "warn")[]),
   });
 }
 

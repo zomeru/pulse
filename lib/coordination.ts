@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import {
+  MAX_MAILBOX_ROWS,
+  REAP_MIN_INTERVAL_MS,
   RESERVATION_TTL_MS,
   SIGNAL_TTL_MS,
   STALE_MS,
@@ -10,6 +12,7 @@ const CONNECTION_CLEAR = {
   busy: false,
   connectionId: null,
   peerId: null,
+  connectionStartedAt: null,
   connectionExpiresAt: null,
 } as const;
 
@@ -20,6 +23,13 @@ export interface TerminationResult {
   connectionId: string;
   memberIds: string[];
   notifiedPeerId: string | null;
+  /**
+   * True when the caller was not a participant in the connection it named, and
+   * the request was therefore ignored. Refusing (rather than acting) is the
+   * point: a connection token is a capability for its two participants, not a
+   * handle on a stranger's call.
+   */
+  refused: boolean;
 }
 
 function includeActor(
@@ -54,9 +64,15 @@ function connectionMatches(
   return row.connectionId === connectionId && row.peerId === peerId;
 }
 
-async function clearConnection(connectionId: string): Promise<void> {
+async function clearConnection(
+  connectionId: string,
+  memberIds: string[],
+): Promise<void> {
+  // Scoped to the ids we actually reserved. Clearing "every row with this token"
+  // would also clear rows a *different* reservation legitimately owns.
+  if (memberIds.length === 0) return;
   await prisma.presence.updateMany({
-    where: { connectionId },
+    where: { connectionId, id: { in: memberIds } },
     data: CONNECTION_CLEAR,
   });
 }
@@ -149,7 +165,7 @@ export async function reserveConnection({
       !hasLiveLease(source.connectionExpiresAt, now) ||
       !connectionMatches(source, connectionId, targetId)
     ) {
-      await clearConnection(connectionId);
+      await clearConnection(connectionId, [targetId, requesterId]);
       return "declined";
     }
     sourceAlreadyReserved = true;
@@ -175,16 +191,16 @@ export async function reserveConnection({
     !connectionMatches(targetMember, connectionId, requesterId) ||
     !connectionMatches(sourceMember, connectionId, targetId)
   ) {
-    await clearConnection(connectionId);
+    await clearConnection(connectionId, [targetId, requesterId]);
     return "declined";
   }
 
   const leaseRenewal = await prisma.presence.updateMany({
-    where: { connectionId },
+    where: { connectionId, id: { in: [targetId, requesterId] } },
     data: { connectionExpiresAt: new Date(now + RESERVATION_TTL_MS) },
   });
   if (leaseRenewal.count !== 2) {
-    await clearConnection(connectionId);
+    await clearConnection(connectionId, [targetId, requesterId]);
     return "declined";
   }
 
@@ -192,13 +208,18 @@ export async function reserveConnection({
 }
 
 /**
- * End one token-qualified connection. Only rows carrying connectionId are
- * changed, so a delayed cleanup from an old session cannot clear a new one.
+ * End one connection. Only rows carrying connectionId are changed, so a delayed
+ * cleanup from an old session cannot clear a new one.
+ *
+ * The caller must be one of the two participants. `detachedActor` exists only
+ * for the reaper, which has just deleted a stale participant's row and still
+ * owes its peer a terminal notification.
  */
 export async function terminateConnection(
   connectionId: string,
   actorId: string,
   signalType: TerminationSignal,
+  { detachedActor = false }: { detachedActor?: boolean } = {},
 ): Promise<TerminationResult> {
   const members = await prisma.presence.findMany({
     where: { connectionId },
@@ -207,13 +228,24 @@ export async function terminateConnection(
   const memberIds = members.map((member) => member.id);
 
   if (memberIds.length === 0) {
-    return { connectionId, memberIds, notifiedPeerId: null };
+    return { connectionId, memberIds, notifiedPeerId: null, refused: false };
   }
 
-  const recipients = [...new Set(memberIds)];
-  if (memberIds.length > 0) recipients.push(actorId);
+  if (!detachedActor && !memberIds.includes(actorId)) {
+    // The actor is not in this connection. Acting here would let anyone holding
+    // a leaked or replayed token end somebody else's call.
+    return { connectionId, memberIds, notifiedPeerId: null, refused: true };
+  }
+
+  // Notify the participants that still exist, plus the actor when the reaper
+  // already claimed it: its row is cleared rather than deleted, so it can still
+  // read one poll's worth of mailbox and this is how it learns that the
+  // connection it thought it had is gone.
+  const recipients = detachedActor
+    ? [...new Set([...memberIds, actorId])]
+    : memberIds;
   const notifiedPeerIds: string[] = [];
-  for (const recipientId of new Set(recipients)) {
+  for (const recipientId of recipients) {
     try {
       // Write terminal markers before clearing the reservation. A delayed
       // request can then observe the tombstone and cannot reserve this token
@@ -235,19 +267,46 @@ export async function terminateConnection(
   }
 
   const cleared = await prisma.presence.updateMany({
-    where: { connectionId },
+    where: { connectionId, id: { in: memberIds } },
     data: CONNECTION_CLEAR,
   });
 
   if (cleared.count === 0 || notifiedPeerIds.length === 0) {
-    return { connectionId, memberIds, notifiedPeerId: null };
+    return { connectionId, memberIds, notifiedPeerId: null, refused: false };
   }
 
   return {
     connectionId,
     memberIds,
     notifiedPeerId: notifiedPeerIds[0] ?? null,
+    refused: false,
   };
+}
+
+/**
+ * Keep a recipient's mailbox bounded. Ordering is (createdAt, id) so the cut is
+ * stable when several rows share a timestamp.
+ */
+export async function trimMailbox(
+  toId: string,
+  keep: number = MAX_MAILBOX_ROWS,
+): Promise<void> {
+  const boundary = await prisma.signal.findFirst({
+    where: { toId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip: keep,
+    select: { createdAt: true, id: true },
+  });
+  if (!boundary) return;
+  await prisma.signal.deleteMany({
+    where: {
+      toId,
+      OR: [
+        { createdAt: { lt: boundary.createdAt } },
+        { createdAt: boundary.createdAt, id: { lte: boundary.id } },
+      ],
+    },
+  });
 }
 
 /**
@@ -286,7 +345,12 @@ export async function reapStaleConnections(now = Date.now()): Promise<Terminatio
     handledTokens.add(row.connectionId);
     terminated.push(
       includeActor(
-        await terminateConnection(row.connectionId, row.id, "end"),
+        await terminateConnection(row.connectionId, row.id, "end", {
+          // The claim above cleared the actor's row, so it can no longer show up
+          // as a member. Holding the token *was* the membership — that is why we
+          // were allowed to claim it.
+          detachedActor: true,
+        }),
         row.id,
       ),
     );
@@ -315,7 +379,11 @@ export async function reapStaleConnections(now = Date.now()): Promise<Terminatio
     handledTokens.add(row.connectionId);
     terminated.push(
       includeActor(
-        await terminateConnection(row.connectionId, row.id, "end"),
+        await terminateConnection(row.connectionId, row.id, "end", {
+          // The row is gone, so it cannot prove membership any more. It was a
+          // member a moment ago — that is the whole reason we are here.
+          detachedActor: true,
+        }),
         row.id,
       ),
     );
@@ -358,6 +426,7 @@ export async function reapStaleConnections(now = Date.now()): Promise<Terminatio
     data: {
       busy: false,
       peerId: null,
+      connectionStartedAt: null,
       connectionExpiresAt: null,
     },
   });
@@ -370,4 +439,32 @@ export async function reapStaleConnections(now = Date.now()): Promise<Terminatio
   });
 
   return terminated;
+}
+
+let lastSweep = 0;
+
+/**
+ * Run the reaper, but not on every single request.
+ *
+ * `reapStaleConnections` is a handful of table-wide statements, and join and
+ * poll both used to run it every time — so one request cost a second full sweep
+ * of the coordination tables, which is exactly the wrong cost curve under load.
+ *
+ * This throttle is per warm instance and is *not* a security boundary (a cold
+ * start simply runs it); it is here to stop paying for the same work twice in a
+ * second. Correctness does not depend on it: the reaper only has to run
+ * somewhere every couple of seconds, and every live user polls every 1.5s.
+ */
+export async function reapIfDue(
+  now = Date.now(),
+  intervalMs = REAP_MIN_INTERVAL_MS,
+): Promise<TerminationResult[]> {
+  if (now - lastSweep < intervalMs) return [];
+  lastSweep = now;
+  try {
+    return await reapStaleConnections(now);
+  } catch {
+    // A sweep failure must not fail a poll; the next one will try again.
+    return [];
+  }
 }

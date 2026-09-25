@@ -1,107 +1,153 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { reapStaleConnections } from "@/lib/coordination";
-import { ACTIVE_LEASE_MS, STALE_MS } from "@/lib/presence";
+import { reapIfDue } from "@/lib/coordination";
+import {
+  ACTIVE_LEASE_MS,
+  MAX_CONNECTION_MS,
+  MAX_INBOX_READ,
+  MAX_PEERS_PER_POLL,
+  STALE_MS,
+} from "@/lib/presence";
 import type { PollResponse } from "@/lib/types";
+import { apiError, handleApi, jsonResponse } from "@/lib/http";
+import { isSessionToken } from "@/lib/session";
+import {
+  MAX_ACK_IDS,
+  MAX_POLL_URL_LENGTH,
+  isConnectionId,
+  isSessionId,
+  parseAckList,
+} from "@/lib/validate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/poll?id= — the single endpoint that drives the live map.
-// It (1) heartbeats only the caller, (2) expires stale presence and active
-// connections, (3) returns filtered online peers, and (4) reads this user's
-// mailbox with at-least-once delivery.
+// GET /api/poll?id=&connectionId=&ack= with header x-pulse-session.
+//
+// The single endpoint that drives the live map. It (1) heartbeats only the
+// caller, (2) expires stale presence and active connections, (3) returns
+// filtered online peers, and (4) reads this user's mailbox with at-least-once
+// delivery.
+//
+// It is also the most sensitive endpoint in the app: it heartbeats a row, renews
+// a connection lease, deletes acknowledged signals and returns a private
+// mailbox. A session id is not a credential — every id in the `peers` list
+// below is handed to every caller — so the whole endpoint is gated on the
+// session token, and the heartbeat is the gate: no token, no row touched, and
+// nothing read.
 export async function GET(request: NextRequest) {
-  const id = request.nextUrl.searchParams.get("id");
-  const connectionId = request.nextUrl.searchParams.get("connectionId");
+  return handleApi("poll", async () => {
+    if (request.nextUrl.href.length > MAX_POLL_URL_LENGTH) {
+      return apiError(414, "url_too_long");
+    }
 
-  if (!id) {
-    return Response.json({ error: "missing id" }, { status: 400 });
-  }
-  if (connectionId && (connectionId.length < 8 || connectionId.length > 128)) {
-    return Response.json({ error: "invalid connection" }, { status: 400 });
-  }
+    const id = request.nextUrl.searchParams.get("id");
+    const connectionId = request.nextUrl.searchParams.get("connectionId");
+    const sessionToken = request.headers.get("x-pulse-session");
 
-  const acknowledgedSignalIds = (request.nextUrl.searchParams.get("ack") ?? "")
-    .split(",")
-    .map((signalId) => signalId.trim())
-    .filter((signalId) => signalId.length > 0 && signalId.length <= 128)
-    .slice(0, 100);
+    if (!isSessionId(id)) return apiError(400, "invalid_id");
+    if (connectionId !== null && !isConnectionId(connectionId)) {
+      return apiError(400, "invalid_connection");
+    }
+    if (!isSessionToken(sessionToken)) return apiError(401, "unknown_session");
 
-  const now = Date.now();
-  await prisma.presence.updateMany({
-    where: { id },
-    data: { lastSeen: new Date(now) },
-  });
-  if (connectionId) {
-    // Only a currently connected client may renew the active lease. A stale
-    // token cannot keep an old reservation (or a newer session) alive.
-    await prisma.presence.updateMany({
-      where: {
-        id,
-        connectionId,
-        connectionExpiresAt: { gt: new Date(now) },
-      },
-      data: { connectionExpiresAt: new Date(now + ACTIVE_LEASE_MS) },
+    const acknowledgedSignalIds = parseAckList(
+      request.nextUrl.searchParams.get("ack"),
+    ).slice(0, MAX_ACK_IDS);
+
+    const now = Date.now();
+
+    // Authentication and heartbeat in one conditional write. This is the gate:
+    // a token that does not own this id updates nothing, so none of the reads
+    // or writes below can run on somebody else's behalf.
+    const heartbeat = await prisma.presence.updateMany({
+      where: { id, sessionToken },
+      data: { lastSeen: new Date(now) },
     });
-  }
+    if (heartbeat.count !== 1) return apiError(401, "unknown_session");
 
-  if (acknowledgedSignalIds.length > 0) {
-    // Delete only signals this client says it processed. If the response was
-    // lost, the client never sends the acknowledgement and receives them again.
-    await prisma.signal.deleteMany({
+    if (connectionId) {
+      // Only a currently connected client may renew the active lease. A stale
+      // token cannot keep an old reservation (or a newer session) alive.
+      //
+      // Two conditions keep this from becoming a way to hold a stranger: the
+      // reservation must still be live, and the connection must still be inside
+      // its maximum lifetime. `connectionStartedAt` is stamped once, by `accept`,
+      // so neither side can push the deadline out by asking again.
+      await prisma.presence.updateMany({
+        where: {
+          id,
+          connectionId,
+          connectionExpiresAt: { gt: new Date(now) },
+          connectionStartedAt: { gte: new Date(now - MAX_CONNECTION_MS) },
+        },
+        data: { connectionExpiresAt: new Date(now + ACTIVE_LEASE_MS) },
+      });
+    }
+
+    if (acknowledgedSignalIds.length > 0) {
+      // Delete only signals this client says it processed. If the response was
+      // lost, the client never sends the acknowledgement and receives them again.
+      await prisma.signal.deleteMany({
+        where: {
+          toId: id,
+          id: { in: acknowledgedSignalIds },
+        },
+      });
+    }
+
+    // This is deliberately scoped to the caller's heartbeat. Refreshing every
+    // presence row would keep crashed users alive forever while another user
+    // continued polling.
+    const terminations = await reapIfDue(now);
+    const endedConnectionIds = new Set(
+      terminations
+        .filter((termination) => termination.memberIds.includes(id))
+        .map((termination) => termination.connectionId),
+    );
+
+    // Bounded. An unbounded map is a product decision we do not need to make
+    // before there is a reason to, and an unbounded response is a lever anyone
+    // flooding `join` could pull.
+    const peers = await prisma.presence.findMany({
       where: {
-        toId: id,
-        id: { in: acknowledgedSignalIds },
+        id: { not: id },
+        lastSeen: { gte: new Date(now - STALE_MS) },
       },
+      select: { id: true, lat: true, lng: true, busy: true },
+      take: MAX_PEERS_PER_POLL,
     });
-  }
 
-  // This is deliberately scoped to the caller's heartbeat. Refreshing every
-  // presence row would keep crashed users alive forever while another user
-  // continued polling.
-  const terminations = await reapStaleConnections(now);
-  const endedConnectionIds = new Set(
-    terminations
-      .filter((termination) => termination.memberIds.includes(id))
-      .map((termination) => termination.connectionId),
-  );
+    // Signals are delivered at least once, oldest first, and only a bounded
+    // slice at a time: an unacknowledged backlog should cost the recipient a
+    // page of rows, not an unbounded response. The client acknowledges what it
+    // processed and collects the rest on the following poll.
+    // reapIfDue() removes rows past the signal TTL.
+    const inbox = await prisma.signal.findMany({
+      where: { toId: id },
+      orderBy: { createdAt: "asc" },
+      take: MAX_INBOX_READ,
+    });
 
-  const peers = await prisma.presence.findMany({
-    where: {
-      id: { not: id },
-      lastSeen: { gte: new Date(now - STALE_MS) },
-    },
-    select: { id: true, lat: true, lng: true, busy: true },
+    const response: PollResponse = {
+      peers: peers.map((peer) => ({
+        id: peer.id,
+        lat: peer.lat,
+        lng: peer.lng,
+        busy: peer.busy,
+      })),
+      signals: inbox.map((signal) => ({
+        id: signal.id,
+        fromId: signal.fromId,
+        toId: signal.toId,
+        type: signal.type as PollResponse["signals"][number]["type"],
+        payload: signal.payload,
+        connectionId: signal.connectionId,
+        createdAt: signal.createdAt.toISOString(),
+      })),
+      endedConnectionIds: [...endedConnectionIds],
+    };
+
+    return jsonResponse(response);
   });
-
-  // Signals are delivered at least once. The client de-duplicates them by
-  // remembering their IDs; leaving rows for the short signal TTL prevents a
-  // lost HTTP response from permanently losing a request or end notification.
-  // reapStaleConnections() removes old mailbox rows above.
-  const inbox = await prisma.signal.findMany({
-    where: { toId: id },
-    orderBy: { createdAt: "asc" },
-  });
-
-  const response: PollResponse = {
-    peers: peers.map((peer) => ({
-      id: peer.id,
-      lat: peer.lat,
-      lng: peer.lng,
-      busy: peer.busy,
-    })),
-    signals: inbox.map((signal) => ({
-      id: signal.id,
-      fromId: signal.fromId,
-      toId: signal.toId,
-      type: signal.type as PollResponse["signals"][number]["type"],
-      payload: signal.payload,
-      connectionId: signal.connectionId,
-      createdAt: signal.createdAt.toISOString(),
-    })),
-    endedConnectionIds: [...endedConnectionIds],
-  };
-
-  return Response.json(response);
 }

@@ -13,18 +13,27 @@ datasource db {
 }
 
 model Presence {
-  id                  String    @id // client-generated session uuid
-  incarnationId       String? // page instance token, protects delayed leave requests
+  // `id` is a client-generated uuid and doubles as the session's *public
+  // address* — every other user receives it in the poll `peers` list, because
+  // you cannot tap a dot you cannot address. It is therefore NOT a credential.
+  id           String @id
+  // Server-issued capability that proves the caller owns this row. Never sent
+  // to other users, never written to any log, and required on every request
+  // that reads or changes this session's state.
+  sessionToken String
+  // Page instance token. Proves a lifecycle request came from *this* page and
+  // not a delayed one from a page that has already been replaced.
+  incarnationId       String
   lat                 Float // ALREADY privacy-offset coords (raw is never stored)
   lng                 Float
   busy                Boolean   @default(false) // true while in an active connection
   connectionId        String? // token for the active connection, if any
   peerId              String? // other participant in the active connection
+  connectionStartedAt DateTime? // set when accepted; caps how long one call can be held
   connectionExpiresAt DateTime? // lease for a requested/connecting connection
   lastSeen            DateTime
 
   @@index([lastSeen])
-  @@index([incarnationId])
   @@index([connectionId])
   @@index([connectionExpiresAt])
 }
@@ -42,4 +51,5 @@ model Signal {
   @@index([toId])
   @@index([toId, createdAt])
   @@index([connectionId])
+  @@index([createdAt])
 }

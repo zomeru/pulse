@@ -7,7 +7,7 @@ import { AlertIcon, LockIcon, SendIcon } from "./Icon";
 export default function EntryGate({
   onReady,
 }: {
-  onReady: (lat: number, lng: number) => void;
+  onReady: (lat: number, lng: number) => Promise<void>;
 }) {
   const [status, setStatus] = useState<"idle" | "locating" | "error">("idle");
   const [error, setError] = useState<string>("");
@@ -23,7 +23,16 @@ export default function EntryGate({
     setStatus("locating");
     setError("");
     navigator.geolocation.getCurrentPosition(
-      (pos) => onReady(pos.coords.latitude, pos.coords.longitude),
+      (pos) => {
+        // Joining opens the session; if the server will not have us, say so
+        // here rather than dropping the user onto a map with no dot.
+        void onReady(pos.coords.latitude, pos.coords.longitude).catch(() => {
+          setStatus("error");
+          setError(
+            "We couldn't reach Pulse. Check your connection, then try again.",
+          );
+        });
+      },
       (err) => {
         setStatus("error");
         setError(

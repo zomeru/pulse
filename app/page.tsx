@@ -11,7 +11,13 @@ import NoticeStack, { type Notice } from "./components/NoticeStack";
 import TopBar, { type FlowStage } from "./components/TopBar";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useVisualViewportVar } from "./hooks/useVisualViewport";
-import { join, leave, poll, sendSignal } from "@/lib/api";
+import {
+  ApiError,
+  join,
+  leave,
+  poll,
+  sendSignal,
+} from "@/lib/api";
 import { PeerSession, type DescType, type PeerControl } from "@/lib/webrtc";
 import { POLL_INTERVAL_MS, SIGNAL_TTL_MS } from "@/lib/presence";
 import { type PeerDot, type SignalMsg } from "@/lib/types";
@@ -59,8 +65,13 @@ export default function Home() {
   const compact = useMediaQuery("(max-width: 639px)");
 
   const [phase, setPhase] = useState<"gate" | "live">("gate");
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [incarnationId, setIncarnationId] = useState(() => crypto.randomUUID());
+  // Server-issued proof that we own the presence row we are talking about. Held
+  // in a ref because it is set once per session and read from callbacks and
+  // async continuations that would otherwise close over a stale copy.
+  const sessionTokenRef = useRef("");
+  const sessionRotations = useRef(0);
   const [peers, setPeers] = useState<PeerDot[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
@@ -208,6 +219,67 @@ export default function Home() {
     terminalTimers.current.clear();
   }
 
+  /**
+   * Open (or re-open) the server-side session for this page and keep the token
+   * it issues.
+   *
+   * A join can legitimately fail with "session_taken": the id is ours in the
+   * browser but the server has given it to somebody else, or our row was reaped
+   * and the id was claimed in between. Ids are public — the whole map is handed
+   * out to every caller — so the honest response is to take a new one rather
+   * than argue. One retry, because that is the only failure that retrying fixes.
+   */
+  async function openSession(location: { lat: number; lng: number }) {
+    let id = sessionId;
+    let token = sessionTokenRef.current;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await join(
+          id,
+          location.lat,
+          location.lng,
+          incarnationRef.current,
+          token || undefined,
+        );
+        sessionTokenRef.current = result.sessionToken;
+        return;
+      } catch (error) {
+        if (
+          !(error instanceof ApiError) ||
+          !error.isUnknownSession ||
+          attempt === 1
+        ) {
+          throw error;
+        }
+        id = crypto.randomUUID();
+        token = "";
+        sessionTokenRef.current = "";
+        const nextIncarnationId = crypto.randomUUID();
+        incarnationRef.current = nextIncarnationId;
+        setIncarnationId(nextIncarnationId);
+        setSessionId(id);
+        sessionRotations.current += 1;
+      }
+    }
+  }
+
+  /**
+   * The server no longer knows this session, so anything we think we have is
+   * already gone: drop it and come back as a new one. Bounded, because if
+   * several rotations in a row fail the cause is not the session id.
+   */
+  async function recoverSession(): Promise<boolean> {
+    const location = myLocationRef.current;
+    if (!location || sessionRotations.current >= 3) return false;
+    finishConnectionRef.current(undefined, null);
+    try {
+      await openSession(location);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Retry only the terminal notification; this never starts a new peer.
   function sendTerminalSignal(
     peerId: string,
@@ -217,9 +289,17 @@ export default function Home() {
     void (async () => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          await sendSignal(sessionId, peerId, type, connectionId);
+          await sendSignal({
+            fromId: sessionId,
+            toId: peerId,
+            type,
+            connectionId,
+            sessionToken: sessionTokenRef.current,
+          });
           return;
-        } catch {
+        } catch (error) {
+          // A refusal will not become an acceptance.
+          if (error instanceof ApiError && error.isTerminal) return;
           if (attempt < 2) {
             await new Promise<void>((resolve) => {
               const timer = setTimeout(() => {
@@ -288,9 +368,14 @@ export default function Home() {
     const peer = new PeerSession(initiator, {
       onSignal: (type: DescType, payload: string) => {
         if (isCurrentPeer(peer, expected)) {
-          void sendSignal(sessionId, peerId, type, connectionId, payload).catch(
-            () => {},
-          );
+          void sendSignal({
+            fromId: sessionId,
+            toId: peerId,
+            type,
+            connectionId,
+            payload,
+            sessionToken: sessionTokenRef.current,
+          }).catch(() => {});
         }
       },
       onChat: (text) => {
@@ -423,11 +508,29 @@ export default function Home() {
     clearMissingPeerTimer();
     setConn({ kind: "requesting", ...expected });
 
-    void sendSignal(sessionId, peerId, "request", connectionId).catch(() => {
-      if (matchesConnection(connRef.current, expected)) {
+    void sendSignal({
+      fromId: sessionId,
+      toId: peerId,
+      type: "request",
+      connectionId,
+      sessionToken: sessionTokenRef.current,
+    })
+      .then((result) => {
+        if (!matchesConnection(connRef.current, expected)) return;
+        // Nobody was there to answer. The server tells us directly rather than
+        // delivering a rejection the target never sent.
+        if (result.autoDeclined) {
+          finishConnection("They're not available right now.", null, expected);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!matchesConnection(connRef.current, expected)) return;
+        if (error instanceof ApiError && error.isUnknownSession) {
+          void recoverSession();
+          return;
+        }
         finishConnection("Connection request failed.", "end", expected);
-      }
-    });
+      });
 
     requestTimer.current = setTimeout(() => {
       requestTimer.current = null;
@@ -458,15 +561,19 @@ export default function Home() {
       return;
     }
 
-    void sendSignal(
-      sessionId,
-      expected.peerId,
-      "accept",
-      expected.connectionId,
-    ).catch(() => {
-      if (matchesConnection(connRef.current, expected)) {
-        finishConnection("Connection could not start.", "end", expected);
+    void sendSignal({
+      fromId: sessionId,
+      toId: expected.peerId,
+      type: "accept",
+      connectionId: expected.connectionId,
+      sessionToken: sessionTokenRef.current,
+    }).catch((error: unknown) => {
+      if (!matchesConnection(connRef.current, expected)) return;
+      if (error instanceof ApiError && error.isUnknownSession) {
+        void recoverSession();
+        return;
       }
+      finishConnection("Connection could not start.", "end", expected);
     });
   }
 
@@ -587,12 +694,13 @@ export default function Home() {
             connectionId,
           })
         ) {
-          void sendSignal(
-            sessionId,
-            signal.fromId,
-            "decline",
+          void sendSignal({
+            fromId: sessionId,
+            toId: signal.fromId,
+            type: "decline",
             connectionId,
-          ).catch(() => {});
+            sessionToken: sessionTokenRef.current,
+          }).catch(() => {});
         }
         break;
       }
@@ -693,10 +801,14 @@ export default function Home() {
   const processSignalRef = useRef(processSignal);
   const finishConnectionRef = useRef(finishConnection);
   const reconcileMissingPeerRef = useRef(reconcileMissingPeer);
+  const recoverSessionRef = useRef(recoverSession);
+  const openSessionRef = useRef(openSession);
   useEffect(() => {
     processSignalRef.current = processSignal;
     finishConnectionRef.current = finishConnection;
     reconcileMissingPeerRef.current = reconcileMissingPeer;
+    recoverSessionRef.current = recoverSession;
+    openSessionRef.current = openSession;
   });
 
   useEffect(() => {
@@ -714,9 +826,11 @@ export default function Home() {
           ? observedConnection.connectionId
           : undefined;
       const acknowledgedSignalIds = pendingSignalAcks.current.slice(0, 100);
+      let delay = POLL_INTERVAL_MS;
       try {
         const data = await poll(
           sessionId,
+          sessionTokenRef.current,
           leaseConnectionId,
           acknowledgedSignalIds,
         );
@@ -756,15 +870,25 @@ export default function Home() {
         }
         pollFailures.current = 0;
         setSync("live");
-      } catch {
-        // The heartbeat is what keeps this dot on the map, so a run of failed
-        // polls is worth surfacing rather than swallowing silently.
-        pollFailures.current += 1;
-        if (pollFailures.current >= POLL_FAILURES_BEFORE_WARN) {
-          setSync("reconnecting");
+      } catch (error) {
+        if (error instanceof ApiError && error.isUnknownSession) {
+          // The row is gone (reaped, or claimed by a new session). Come back as
+          // somebody new rather than polling a dot that isn't ours.
+          await recoverSessionRef.current();
+        } else if (error instanceof ApiError && error.status === 429) {
+          // Being asked to slow down is not a broken connection: back off and
+          // stay quiet about it so the dot does not look lost.
+          delay = POLL_INTERVAL_MS * 3;
+        } else {
+          // The heartbeat is what keeps this dot on the map, so a run of failed
+          // polls is worth surfacing rather than swallowing silently.
+          pollFailures.current += 1;
+          if (pollFailures.current >= POLL_FAILURES_BEFORE_WARN) {
+            setSync("reconnecting");
+          }
         }
       }
-      if (active) timer = setTimeout(tick, POLL_INTERVAL_MS);
+      if (active) timer = setTimeout(tick, delay);
     };
     tick();
 
@@ -787,7 +911,16 @@ export default function Home() {
         finishConnectionRef.current(undefined, null, current);
       }
       leftOnPageHide.current = true;
-      leave(sessionId, current?.connectionId, incarnationRef.current);
+      // Only meaningful once the server has issued us a token; without one the
+      // server cannot tell this request from anybody else's.
+      if (sessionTokenRef.current) {
+        leave(
+          sessionId,
+          sessionTokenRef.current,
+          incarnationRef.current,
+          current?.connectionId,
+        );
+      }
     };
 
     const onPageShow = (event: PageTransitionEvent) => {
@@ -801,12 +934,7 @@ export default function Home() {
         setIncarnationId(nextIncarnationId);
         leftOnPageHide.current = false;
       }
-      void join(
-        sessionId,
-        location.lat,
-        location.lng,
-        nextIncarnationId,
-      ).catch(() => {});
+      void openSessionRef.current(location).catch(() => {});
     };
 
     // pagehide covers normal navigation and tab/window closure. beforeunload
@@ -832,7 +960,8 @@ export default function Home() {
     const location = { lat, lng };
     myLocationRef.current = location;
     setMyLocation(location);
-    await join(sessionId, lat, lng, incarnationRef.current);
+    sessionRotations.current = 0;
+    await openSession(location);
     setPhase("live");
   }
 
