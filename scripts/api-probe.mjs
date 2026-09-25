@@ -279,6 +279,16 @@ section("signaling: no injection into somebody else's session");
     !victimUnharmed.body?.signals?.some((s) => s.connectionId === stolenConnectionId),
   );
 
+  // A well-formed token that owns nothing, tried against a real id.
+  const impersonate = await post("/api/signal", {
+    fromId: victim.id,
+    toId: stranger.id,
+    type: "request",
+    connectionId: uuid(),
+    sessionToken: fakeToken(),
+  });
+  ok("cannot speak for another participant", impersonate.status === 401, `got ${impersonate.status}`);
+
   // A real connection between victim and stranger, then attacker tries to use it.
   const connectionId = uuid();
   await signal(victim, stranger.id, "request", connectionId);

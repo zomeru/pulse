@@ -120,7 +120,18 @@ export async function POST(request: NextRequest) {
       where: { id: fromId, sessionToken: presented },
       select: { id: true },
     });
-    if (!sender) return apiError(401, "unknown_session");
+    if (!sender) {
+      // A well-formed token that owns no row. Charge the address as well, so
+      // inventing a token per request does not mint a fresh bucket every time.
+      const anonymous = await enforceRateLimit(
+        "signal:ip",
+        clientSubject(request),
+        SIGNAL_LIMITS.unauthenticated,
+      );
+      return anonymous.allowed
+        ? apiError(401, "unknown_session")
+        : anonymous.response;
+    }
 
     // A single connection cannot flood one mailbox. The connection token is a
     // secret, so this bucket is only reachable by the two participants.
