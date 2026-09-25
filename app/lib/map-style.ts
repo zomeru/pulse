@@ -66,7 +66,12 @@ export function setPaint(
   }
 }
 
-function hide(map: MapboxMap, layerId: string): void {
+function setLayout(
+  map: MapboxMap,
+  layerId: string,
+  property: string,
+  value: unknown,
+): void {
   try {
     (
       map.setLayoutProperty as unknown as (
@@ -74,10 +79,14 @@ function hide(map: MapboxMap, layerId: string): void {
         property: string,
         value: unknown,
       ) => unknown
-    )(layerId, "visibility", "none");
+    )(layerId, property, value);
   } catch {
     // As above.
   }
+}
+
+function hide(map: MapboxMap, layerId: string): void {
+  setLayout(map, layerId, "visibility", "none");
 }
 
 export function restyleMap(map: MapboxMap): void {
@@ -154,8 +163,10 @@ export function restyleMap(map: MapboxMap): void {
       setPaint(map, id, "text-color", INK.label);
       setPaint(map, id, "text-halo-color", INK.sea);
       setPaint(map, id, "text-halo-width", 1.3);
-      setPaint(map, id, "text-letter-spacing", 0.18);
-      setPaint(map, id, "text-transform", "uppercase");
+      // Layout, not paint: text-transform and text-letter-spacing live in the
+      // style spec's layout bucket, and setPaintProperty throws on them.
+      setLayout(map, id, "text-transform", "uppercase");
+      setLayout(map, id, "text-letter-spacing", 0.18);
       continue;
     }
   }

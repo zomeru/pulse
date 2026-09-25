@@ -216,19 +216,16 @@ export default function WorldMap({
         }
       });
 
-      // Lift the splash as soon as the style exists. `load` is the complete
-      // event, but a slow tile should never hold the user on a loading screen.
-      map.on("style.load", () => {
-        if (!cancelled) setReady(true);
-      });
-      fallbackTimer = setTimeout(() => {
-        if (!cancelled) setReady(true);
-      }, READY_FALLBACK_MS);
-
-      map.on("load", () => {
-        if (cancelled) return;
+      // Lift the splash as soon as the style exists, and restyle there too.
+      // `load` waits for the first fully rendered frame, which a slow tile can
+      // hold up indefinitely — and the restyle does not need a rendered frame,
+      // only a loaded style. Hanging the whole visual treatment off `load` is
+      // how you get an unstyled map with no error to explain it.
+      let styled = false;
+      const applyStyle = () => {
+        if (cancelled || styled) return;
+        styled = true;
         restyleMap(map);
-        map.resize();
         try {
           map.addSource(LINK_SOURCE, {
             type: "geojson",
@@ -273,6 +270,24 @@ export default function WorldMap({
         } catch {
           // The link line is decoration; a style that rejects it still works.
         }
+      };
+
+      map.on("style.load", () => {
+        if (cancelled) return;
+        applyStyle();
+        map.resize();
+        setReady(true);
+      });
+
+      // A slow tile must never leave someone staring at a splash screen.
+      fallbackTimer = setTimeout(() => {
+        if (!cancelled) setReady(true);
+      }, READY_FALLBACK_MS);
+
+      map.on("load", () => {
+        if (cancelled) return;
+        applyStyle();
+        map.resize();
         if (fallbackTimer) {
           clearTimeout(fallbackTimer);
           fallbackTimer = null;
