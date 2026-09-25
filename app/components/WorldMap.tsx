@@ -79,6 +79,22 @@ class RecenterControl {
   }
 }
 
+/**
+ * The zoom at which the whole world exactly spans `width` pixels.
+ *
+ * Without it, a wide viewport can reach Mapbox's low zoom levels where the
+ * world is *narrower* than the screen: the map then draws the world flanked
+ * by two half-copies, which reads as a map that has drifted off centre. This
+ * is derived from the current zoom rather than hardcoding Mapbox's tile size,
+ * because the tile size cancels out of the ratio.
+ */
+function worldFitsZoom(map: MapboxMap, width: number): number {
+  const current = map.getZoom();
+  const worldNow = 512 * 2 ** current;
+  const fits = current + Math.log2(Math.max(width, 1) / worldNow);
+  return Math.min(Math.max(fits, -1), 20);
+}
+
 export default function WorldMap({
   peers,
   me,
@@ -152,8 +168,6 @@ export default function WorldMap({
         zoom: me ? 3.4 : 1.3,
         // No maxZoom: Mapbox's own ceiling lets you keep going to street
         // level, which is the whole point of a map you are invited to explore.
-        // minZoom stays just above 0 so the world is not drawn three times
-        // side by side.
         minZoom: 1.1,
         attributionControl: false,
         // Rotation is disorienting in a product about place; it is off.
@@ -183,9 +197,13 @@ export default function WorldMap({
         lastWidth = width;
         lastHeight = height;
         map.resize();
+        // The floor for zoom-out depends on the viewport: a wider screen can
+        // reach a lower zoom, so the "whole world" zoom moves with it.
+        map.setMinZoom(worldFitsZoom(map, width));
       });
       observer.observe(container);
       resizeObserverRef.current = observer;
+      map.setMinZoom(worldFitsZoom(map, container.clientWidth || 800));
 
       // Attribution lives bottom-left, stacked above the required Mapbox logo,
       // so the chat panel on the right can never sit on top of it. Zoom and
@@ -299,6 +317,28 @@ export default function WorldMap({
           fallbackTimer = null;
         }
         setReady(true);
+      });
+
+      // On the zoom-out floor the entire world is on screen at once, so holding
+      // the camera over the user buys nothing and costs a lot: the ocean behind
+      // you fills half the frame while the continents pile up against one edge.
+      // From Asia or the Pacific that reads as a globe sitting off to one side
+      // of the screen, and the framing differs depending on where you happen to
+      // be. So at the floor we hand the view to the conventional
+      // Greenwich-centred world and every reader gets the same picture. Only
+      // the longitude moves; latitude is left alone so the view does not jump
+      // further than it has to.
+      //
+      // On `zoomend` only, never `moveend`: this settles the view the moment the
+      // floor is reached, and a pan after that is the reader's to make and is
+      // never second-guessed. The `lng` guard is also what stops this recursing
+      // — the ease lands on 0, so the next `zoomend` returns immediately.
+      map.on("zoomend", () => {
+        if (cancelled) return;
+        if (map.getZoom() > map.getMinZoom() + 0.01) return;
+        const { lat, lng } = map.getCenter();
+        if (Math.abs(lng) < 0.5) return;
+        map.easeTo({ center: [0, lat], duration: 600 });
       });
     })();
 
