@@ -21,7 +21,7 @@ const ICE_CONFIG: RTCConfiguration = {
 };
 
 export class PeerSession {
-  private pc: RTCPeerConnection;
+  private readonly pc: RTCPeerConnection;
   private dc: RTCDataChannel | null = null;
   private readonly polite: boolean;
   private makingOffer = false;
@@ -38,59 +38,72 @@ export class PeerSession {
     this.pc = new RTCPeerConnection(ICE_CONFIG);
 
     this.pc.onicecandidate = ({ candidate }) => {
-      if (candidate) {
-        this.cb.onSignal("ice", JSON.stringify(candidate));
-      }
+      if (this.closed || !candidate) return;
+      this.cb.onSignal("ice", JSON.stringify(candidate));
     };
 
     this.pc.onnegotiationneeded = async () => {
+      if (this.closed) return;
       try {
         this.makingOffer = true;
         await this.pc.setLocalDescription();
-        if (this.pc.localDescription) {
-          this.cb.onSignal("offer", JSON.stringify(this.pc.localDescription));
-        }
+        if (this.closed || !this.pc.localDescription) return;
+        this.cb.onSignal("offer", JSON.stringify(this.pc.localDescription));
+      } catch {
+        if (!this.closed) this.cb.onChannelError();
       } finally {
         this.makingOffer = false;
       }
     };
 
     this.pc.ontrack = ({ streams }) => {
-      this.cb.onRemoteStream(streams[0] ?? null);
+      if (!this.closed) this.cb.onRemoteStream(streams[0] ?? null);
     };
 
     this.pc.onconnectionstatechange = () => {
-      this.cb.onConnectionState(this.pc.connectionState);
+      if (!this.closed) this.cb.onConnectionState(this.pc.connectionState);
     };
 
     if (initiator) {
       this.dc = this.pc.createDataChannel("chat");
       this.wireDataChannel(this.dc);
     } else {
-      this.pc.ondatachannel = (e) => {
-        this.dc = e.channel;
+      this.pc.ondatachannel = (event) => {
+        if (this.closed) {
+          event.channel.close();
+          return;
+        }
+        this.dc = event.channel;
         this.wireDataChannel(this.dc);
       };
     }
   }
 
   private wireDataChannel(dc: RTCDataChannel) {
-    dc.onopen = () => this.cb.onChannelOpen();
+    dc.onopen = () => {
+      if (!this.closed) this.cb.onChannelOpen();
+    };
     dc.onclose = () => {
       if (!this.closed) this.cb.onChannelClose();
     };
     dc.onerror = () => {
       if (!this.closed) this.cb.onChannelError();
     };
-    dc.onmessage = (e) => {
+    dc.onmessage = (event) => {
+      if (this.closed) return;
       try {
-        const msg = JSON.parse(e.data as string);
-        if (msg.t === "chat" && typeof msg.text === "string") {
-          this.cb.onChat(msg.text);
-        } else if (msg.t === "ctrl" && typeof msg.ctrl === "string") {
-          this.cb.onControl(msg.ctrl as PeerControl);
+        const message = JSON.parse(event.data as string);
+        if (message.t === "chat" && typeof message.text === "string") {
+          this.cb.onChat(message.text);
+        } else if (
+          message.t === "ctrl" &&
+          typeof message.ctrl === "string"
+        ) {
+          this.cb.onControl(message.ctrl as PeerControl);
         }
-      } catch {}
+      } catch {
+        // Ignore malformed peer data; it must not tear down a valid session.
+      }
     };
   }
 
@@ -127,20 +140,23 @@ export class PeerSession {
     if (this.ignoreOffer) return;
 
     await this.pc.setRemoteDescription(desc);
+    if (this.closed) return;
     await this.flushPendingCandidates();
+    if (this.closed) return;
     if (desc.type === "offer") {
       await this.pc.setLocalDescription();
-      if (this.pc.localDescription) {
+      if (!this.closed && this.pc.localDescription) {
         this.cb.onSignal("answer", JSON.stringify(this.pc.localDescription));
       }
     }
   }
 
   private async flushPendingCandidates() {
-    if (this.pendingCandidates.length === 0) return;
+    if (this.pendingCandidates.length === 0 || this.closed) return;
     const queued = this.pendingCandidates;
     this.pendingCandidates = [];
     for (const candidate of queued) {
+      if (this.closed) return;
       try {
         await this.pc.addIceCandidate(candidate);
       } catch {}
@@ -171,11 +187,16 @@ export class PeerSession {
 
   async startVideo(): Promise<MediaStream> {
     if (!this.localStream) {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
-      for (const track of this.localStream.getTracks()) {
+      if (this.closed) {
+        for (const track of stream.getTracks()) track.stop();
+        throw new Error("Peer session closed");
+      }
+      this.localStream = stream;
+      for (const track of stream.getTracks()) {
         this.pc.addTrack(track, this.localStream);
       }
     }
@@ -183,16 +204,17 @@ export class PeerSession {
   }
 
   stopVideo() {
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) track.stop();
-      for (const sender of this.pc.getSenders()) {
-        if (sender.track) {
-          try {
-            this.pc.removeTrack(sender);
-          } catch {}
-        }
+    const stream = this.localStream;
+    this.localStream = null;
+    if (!stream) return;
+
+    for (const track of stream.getTracks()) track.stop();
+    for (const sender of this.pc.getSenders()) {
+      if (sender.track) {
+        try {
+          this.pc.removeTrack(sender);
+        } catch {}
       }
-      this.localStream = null;
     }
   }
 
@@ -200,11 +222,24 @@ export class PeerSession {
     if (this.closed) return;
     this.closed = true;
     this.stopVideo();
+    this.pendingCandidates = [];
+
     if (this.dc) {
+      this.dc.onopen = null;
+      this.dc.onclose = null;
+      this.dc.onerror = null;
+      this.dc.onmessage = null;
       try {
         this.dc.close();
       } catch {}
+      this.dc = null;
     }
+
+    this.pc.onicecandidate = null;
+    this.pc.onnegotiationneeded = null;
+    this.pc.ontrack = null;
+    this.pc.onconnectionstatechange = null;
+    this.pc.ondatachannel = null;
     try {
       this.pc.close();
     } catch {}

@@ -23,10 +23,12 @@ export interface SignalMsg {
   toId: string;
   type: SignalType;
   payload: string | null;
+  connectionId: string | null;
   createdAt: string;
 }
 
 export interface PollResponse {
   peers: PeerDot[];
   signals: SignalMsg[];
+  endedConnectionIds: string[];
 }

@@ -13,23 +13,33 @@ datasource db {
 }
 
 model Presence {
-  id       String   @id // client-generated session uuid
-  lat      Float // ALREADY privacy-offset coords (raw is never stored)
-  lng      Float
-  busy     Boolean  @default(false) // true while in an active connection
-  lastSeen DateTime
+  id                  String    @id // client-generated session uuid
+  incarnationId       String? // page instance token, protects delayed leave requests
+  lat                 Float // ALREADY privacy-offset coords (raw is never stored)
+  lng                 Float
+  busy                Boolean   @default(false) // true while in an active connection
+  connectionId        String? // token for the active connection, if any
+  peerId              String? // other participant in the active connection
+  connectionExpiresAt DateTime? // lease for a requested/connecting connection
+  lastSeen            DateTime
 
   @@index([lastSeen])
+  @@index([incarnationId])
+  @@index([connectionId])
+  @@index([connectionExpiresAt])
 }
 
 model Signal {
   // Mailbox for connection requests + WebRTC signaling only.
-  id        String   @id @default(uuid())
-  toId      String // recipient session id
-  fromId    String // sender session id
-  type      String // request | accept | decline | offer | answer | ice | end
-  payload   String? // JSON string (SDP / ICE candidate)
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  toId         String // recipient session id
+  fromId       String // sender session id
+  type         String // request | accept | decline | offer | answer | ice | end
+  payload      String? // JSON string (SDP / ICE candidate)
+  connectionId String? // token for the connection that owns this signal
+  createdAt    DateTime @default(now())
 
   @@index([toId])
+  @@index([toId, createdAt])
+  @@index([connectionId])
 }

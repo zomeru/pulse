@@ -1,73 +1,106 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { STALE_MS, SIGNAL_TTL_MS } from "@/lib/presence";
+import { reapStaleConnections } from "@/lib/coordination";
+import { ACTIVE_LEASE_MS, STALE_MS } from "@/lib/presence";
 import type { PollResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GET /api/poll?id= — the single endpoint that drives the live map.
-// It (1) heartbeats the caller, (2) reaps stale presence + orphan signals,
-// (3) returns the filtered online peers, and (4) drains this user's mailbox.
+// It (1) heartbeats only the caller, (2) expires stale presence and active
+// connections, (3) returns filtered online peers, and (4) reads this user's
+// mailbox with at-least-once delivery.
 export async function GET(request: NextRequest) {
-  const params = request.nextUrl.searchParams;
-  const id = params.get("id");
+  const id = request.nextUrl.searchParams.get("id");
+  const connectionId = request.nextUrl.searchParams.get("connectionId");
 
   if (!id) {
     return Response.json({ error: "missing id" }, { status: 400 });
   }
+  if (connectionId && (connectionId.length < 8 || connectionId.length > 128)) {
+    return Response.json({ error: "invalid connection" }, { status: 400 });
+  }
+
+  const acknowledgedSignalIds = (request.nextUrl.searchParams.get("ack") ?? "")
+    .split(",")
+    .map((signalId) => signalId.trim())
+    .filter((signalId) => signalId.length > 0 && signalId.length <= 128)
+    .slice(0, 100);
 
   const now = Date.now();
-  const staleCutoff = new Date(now - STALE_MS);
-  const signalCutoff = new Date(now - SIGNAL_TTL_MS);
-
-  // 1) Heartbeat — refresh lastSeen for the caller.
   await prisma.presence.updateMany({
-    where: {},
+    where: { id },
     data: { lastSeen: new Date(now) },
   });
+  if (connectionId) {
+    // Only a currently connected client may renew the active lease. A stale
+    // token cannot keep an old reservation (or a newer session) alive.
+    await prisma.presence.updateMany({
+      where: {
+        id,
+        connectionId,
+        connectionExpiresAt: { gt: new Date(now) },
+      },
+      data: { connectionExpiresAt: new Date(now + ACTIVE_LEASE_MS) },
+    });
+  }
 
-  // 2) Reap stale presence rows and orphaned signals (independent deletes —
-  // no atomicity needed, and avoids transactions over a PgBouncer pooler).
-  await prisma.presence.deleteMany({ where: { lastSeen: { lt: staleCutoff } } });
-  await prisma.signal.deleteMany({ where: { createdAt: { lt: signalCutoff } } });
+  if (acknowledgedSignalIds.length > 0) {
+    // Delete only signals this client says it processed. If the response was
+    // lost, the client never sends the acknowledgement and receives them again.
+    await prisma.signal.deleteMany({
+      where: {
+        toId: id,
+        id: { in: acknowledgedSignalIds },
+      },
+    });
+  }
 
-  // 3) Online peers, excluding self.
+  // This is deliberately scoped to the caller's heartbeat. Refreshing every
+  // presence row would keep crashed users alive forever while another user
+  // continued polling.
+  const terminations = await reapStaleConnections(now);
+  const endedConnectionIds = new Set(
+    terminations
+      .filter((termination) => termination.memberIds.includes(id))
+      .map((termination) => termination.connectionId),
+  );
+
   const peers = await prisma.presence.findMany({
     where: {
       id: { not: id },
-      lastSeen: { gte: staleCutoff },
+      lastSeen: { gte: new Date(now - STALE_MS) },
     },
     select: { id: true, lat: true, lng: true, busy: true },
   });
 
-  // 4) Drain this user's mailbox: read, then delete exactly what we read so a
-  // concurrently-inserted signal is never lost.
+  // Signals are delivered at least once. The client de-duplicates them by
+  // remembering their IDs; leaving rows for the short signal TTL prevents a
+  // lost HTTP response from permanently losing a request or end notification.
+  // reapStaleConnections() removes old mailbox rows above.
   const inbox = await prisma.signal.findMany({
     where: { toId: id },
     orderBy: { createdAt: "asc" },
   });
-  if (inbox.length > 0) {
-    await prisma.signal.deleteMany({
-      where: { id: { in: inbox.map((s) => s.id) } },
-    });
-  }
 
   const response: PollResponse = {
-    peers: peers.map((p) => ({
-      id: p.id,
-      lat: p.lat,
-      lng: p.lng,
-      busy: p.busy,
+    peers: peers.map((peer) => ({
+      id: peer.id,
+      lat: peer.lat,
+      lng: peer.lng,
+      busy: peer.busy,
     })),
-    signals: inbox.map((s) => ({
-      id: s.id,
-      fromId: s.fromId,
-      toId: s.toId,
-      type: s.type as PollResponse["signals"][number]["type"],
-      payload: s.payload,
-      createdAt: s.createdAt.toISOString(),
+    signals: inbox.map((signal) => ({
+      id: signal.id,
+      fromId: signal.fromId,
+      toId: signal.toId,
+      type: signal.type as PollResponse["signals"][number]["type"],
+      payload: signal.payload,
+      connectionId: signal.connectionId,
+      createdAt: signal.createdAt.toISOString(),
     })),
+    endedConnectionIds: [...endedConnectionIds],
   };
 
   return Response.json(response);
