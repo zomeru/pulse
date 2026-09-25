@@ -146,8 +146,11 @@ export default function WorldMap({
         // Open on the user when we know where they are, else the whole world.
         center: me ? [me.lng, me.lat] : [0, 18],
         zoom: me ? 3.4 : 1.3,
+        // No maxZoom: Mapbox's own ceiling lets you keep going to street
+        // level, which is the whole point of a map you are invited to explore.
+        // minZoom stays just above 0 so the world is not drawn three times
+        // side by side.
         minZoom: 1.1,
-        maxZoom: 13,
         attributionControl: false,
         // Rotation is disorienting in a product about place; it is off.
         dragRotate: false,
@@ -564,7 +567,11 @@ export default function WorldMap({
         padding: wide
           ? { top: 150, right: 470, bottom: 150, left: 130 }
           : { top: 170, right: 90, bottom: 210, left: 90 },
-        maxZoom: 6.4,
+        // This is a ceiling on the *automatic* framing, not on the user. Set
+        // too low it fights the zoom: connect to someone in your own city and
+        // the map would slam out to a continent view. 11 keeps both beacons
+        // comfortably in frame without ever zooming past a city.
+        maxZoom: 11,
         duration: 1600,
         // `essential` stays false so Mapbox honours prefers-reduced-motion.
       },
