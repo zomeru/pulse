@@ -1,79 +1,859 @@
 @import "tailwindcss";
 
+/* =========================================================================
+   Pulse design system — "night side of the earth"
+   -------------------------------------------------------------------------
+   One dark surface stack, one signal accent, three colour roles:
+     ice      -> you (self)
+     signal   -> the app talking to you (actions, focus, progress)
+     spectrum -> strangers (a small curated palette, never a random hue wheel)
+   ========================================================================= */
+
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* Surfaces — deep space navy, never pure black */
+  --color-void: #03050b;
+  --color-abyss: #060a13;
+  --color-surface: #0a1120;
+  --color-surface-2: #101a2b;
+  --color-hairline: rgba(132, 178, 224, 0.14);
+  --color-hairline-soft: rgba(132, 178, 224, 0.08);
+
+  /* Ink */
+  --color-ink: #e9f0fb;
+  --color-ink-soft: #a9b9d1;
+  --color-ink-faint: #71829b;
+
+  /* Roles */
+  --color-signal: #5ff0c8;
+  --color-signal-deep: #12a184;
+  --color-self: #d3e7ff;
+  --color-alert: #ff7d92;
+
+  --radius-4xl: 1.75rem;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Full height of the *visual* viewport; kept in sync with the on-screen
+     keyboard by useVisualViewport(). Falls back to dvh where unsupported. */
+  --app-vh: 100dvh;
+  --topbar-h: 4rem;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  html,
+  body {
+    height: 100%;
+    background-color: var(--color-void);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  body {
+    /* No browser rubber-banding on the full-bleed map. */
+    overflow: hidden;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 2px;
+  }
+
+  /* Mapbox renders its own focus rings; ours is enough. */
+  .mapboxgl-ctrl-attrib a:focus-visible,
+  .mapboxgl-ctrl-group button:focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-signal) 32%, transparent);
+    color: var(--color-ink);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* =========================================================================
+   Primitives
+   ========================================================================= */
+
+@layer components {
+  /* Frosted plane used by every floating surface. One definition so the app
+     never looks like a pile of one-off cards. */
+  .pulse-glass {
+    background: color-mix(in oklab, var(--color-surface) 78%, transparent);
+    border: 1px solid var(--color-hairline);
+    backdrop-filter: blur(20px) saturate(1.3);
+    -webkit-backdrop-filter: blur(20px) saturate(1.3);
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.05) inset,
+      0 18px 50px -24px rgba(0, 0, 0, 0.95);
+  }
+
+  .pulse-glass-strong {
+    background: color-mix(in oklab, var(--color-surface) 94%, transparent);
+    border: 1px solid var(--color-hairline);
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.06) inset,
+      0 30px 80px -30px rgba(0, 0, 0, 1);
+  }
+
+  /* Small uppercase instrument labels. */
+  .pulse-label {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    line-height: 1;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .pulse-hint {
+    font-size: 0.6875rem;
+    line-height: 1.45;
+    color: var(--color-ink-faint);
+  }
+
+  /* ------------------------------------------------------------------------
+     Presence beacons (map markers)
+     ------------------------------------------------------------------------ */
+
+  .pulse-marker {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 9999px;
+    background: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 320ms var(--ease-out-expo);
+  }
+
+  .pulse-marker__glow {
+    position: absolute;
+    inset: 2px;
+    border-radius: inherit;
+    background: radial-gradient(
+      circle,
+      color-mix(in oklab, var(--beacon) 62%, transparent) 0%,
+      transparent 66%
+    );
+    opacity: 0.5;
+    transform: scale(0.78);
+    transition:
+      opacity 360ms var(--ease-out-expo),
+      transform 420ms var(--ease-out-expo);
+  }
+
+  .pulse-marker__ring {
+    position: absolute;
+    inset: 8px;
+    border-radius: inherit;
+    border: 1px solid color-mix(in oklab, var(--beacon) 70%, transparent);
+    opacity: 0;
+    transform: scale(0.7);
+  }
+
+  .pulse-marker__core {
+    position: relative;
+    width: 11px;
+    height: 11px;
+    border-radius: inherit;
+    background: var(--beacon);
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--color-void) 78%, transparent),
+      0 0 16px 1px color-mix(in oklab, var(--beacon) 65%, transparent);
+    transition: transform 320ms var(--ease-out-expo);
+  }
+
+  .pulse-marker__label {
+    position: absolute;
+    bottom: calc(100% + 2px);
+    left: 50%;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.5rem;
+    background: color-mix(in oklab, var(--color-void) 88%, transparent);
+    border: 1px solid var(--color-hairline-soft);
+    font-family: var(--font-mono);
+    font-size: 0.5625rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--color-ink-soft);
+    opacity: 0;
+    transform: translate(-50%, 4px);
+    transition:
+      opacity 200ms var(--ease-out-expo),
+      transform 260ms var(--ease-out-expo);
+    pointer-events: none;
+  }
+
+  /* Idle: a slow, soft breath. Staggered per peer via --i so a crowded map
+     never pulses in lockstep. */
+  .pulse-marker[data-state="idle"] .pulse-marker__ring {
+    opacity: 0.45;
+    animation: beacon-breathe 4.2s var(--ease-in-out-soft) infinite;
+    animation-delay: calc(var(--i, 0) * -0.55s);
+  }
+
+  .pulse-marker:hover,
+  .pulse-marker:focus-visible {
+    transform: scale(1.14);
+  }
+
+  .pulse-marker:hover .pulse-marker__glow,
+  .pulse-marker:focus-visible .pulse-marker__glow {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+
+  .pulse-marker:hover .pulse-marker__label,
+  .pulse-marker:focus-visible .pulse-marker__label {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  .pulse-marker:active {
+    transform: scale(0.98);
+  }
+
+  /* Busy — someone is already in a conversation. Deliberately NOT clickable
+     looking: no glow, no hover response, hollow core. */
+  .pulse-marker[data-state="busy"] {
+    cursor: default;
+  }
+
+  .pulse-marker[data-state="busy"] .pulse-marker__glow {
+    opacity: 0;
+  }
+
+  .pulse-marker[data-state="busy"] .pulse-marker__core {
+    width: 9px;
+    height: 9px;
+    background: transparent;
+    border: 1.5px solid color-mix(in oklab, var(--beacon) 55%, transparent);
+    box-shadow: none;
+  }
+
+  .pulse-marker[data-state="busy"]:hover .pulse-marker__label {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  /* Target — you asked this person to connect. */
+  .pulse-marker[data-state="target"] {
+    transform: scale(1.3);
+  }
+
+  .pulse-marker[data-state="target"] .pulse-marker__glow {
+    opacity: 0.95;
+    transform: scale(1.12);
+    animation: beacon-throb 1.6s var(--ease-in-out-soft) infinite;
+  }
+
+  .pulse-marker[data-state="target"] .pulse-marker__core {
+    transform: scale(1.15);
+  }
+
+  .pulse-marker[data-state="target"] .pulse-marker__ring {
+    opacity: 0.9;
+    animation: beacon-sweep 2.4s linear infinite;
+  }
+
+  /* Linked — the connection is live. Steady, no animation competing with chat. */
+  .pulse-marker[data-state="linked"] {
+    transform: scale(1.22);
+    cursor: default;
+  }
+
+  .pulse-marker[data-state="linked"] .pulse-marker__glow {
+    opacity: 0.9;
+    transform: scale(1.05);
+  }
+
+  .pulse-marker[data-state="linked"] .pulse-marker__ring {
+    opacity: 0.7;
+    border-style: solid;
+  }
+
+  /* --- yourself -------------------------------------------------------- */
+
+  .pulse-self {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 9999px;
+    pointer-events: none;
+  }
+
+  .pulse-self__halo {
+    position: absolute;
+    inset: 6px;
+    border-radius: inherit;
+    border: 1px dashed color-mix(in oklab, var(--color-self) 45%, transparent);
+    animation: beacon-spin 26s linear infinite;
+  }
+
+  .pulse-self__breath {
+    position: absolute;
+    inset: 12px;
+    border-radius: inherit;
+    border: 1px solid color-mix(in oklab, var(--color-self) 70%, transparent);
+    animation: beacon-breathe 5s var(--ease-in-out-soft) infinite;
+  }
+
+  .pulse-self__core {
+    position: relative;
+    width: 9px;
+    height: 9px;
+    border-radius: inherit;
+    background: var(--color-self);
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--color-void) 72%, transparent),
+      0 0 22px 2px color-mix(in oklab, var(--color-self) 70%, transparent);
+  }
+
+  .pulse-self__label {
+    position: absolute;
+    bottom: calc(100% - 2px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: 0.5rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--color-self) 80%, transparent);
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+    white-space: nowrap;
+  }
+
+  /* The privacy offset, made visible: a quiet 3 km ring around your real
+     position. It reassures rather than exposes — the dot is visibly *near*
+     you, never on top of you. */
+  .pulse-accuracy {
+    border-radius: 9999px;
+    border: 1px dashed color-mix(in oklab, var(--color-self) 16%, transparent);
+    background: radial-gradient(
+      circle,
+      color-mix(in oklab, var(--color-self) 5%, transparent) 0%,
+      transparent 70%
+    );
+    transition: opacity 500ms var(--ease-out-expo);
+    pointer-events: none;
+  }
+
+  /* ------------------------------------------------------------------------
+     Map atmosphere
+     ------------------------------------------------------------------------ */
+
+  .pulse-vignette {
+    background: radial-gradient(
+      132% 100% at 50% 44%,
+      transparent 52%,
+      rgba(3, 5, 11, 0.58) 100%
+    );
+  }
+
+  .pulse-grain {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.045;
+    mix-blend-mode: overlay;
+  }
+
+  .pulse-grid {
+    background-image: radial-gradient(
+      circle at center,
+      color-mix(in oklab, var(--color-signal) 26%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 26px 26px;
+    -webkit-mask-image: radial-gradient(
+      circle at 50% 45%,
+      #000 0%,
+      transparent 70%
+    );
+    mask-image: radial-gradient(circle at 50% 45%, #000 0%, transparent 70%);
+  }
+
+  /* ------------------------------------------------------------------------
+     Status beacons used in panels (incoming request, linking, typing)
+     ------------------------------------------------------------------------ */
+
+  .pulse-orbit {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 9999px;
+  }
+
+  .pulse-orbit::before,
+  .pulse-orbit::after {
+    content: "";
+    position: absolute;
+    border-radius: inherit;
+  }
+
+  .pulse-orbit::before {
+    inset: 0;
+    border: 1px solid color-mix(in oklab, var(--tone, var(--color-signal)) 55%, transparent);
+    animation: beacon-breathe 2.6s var(--ease-in-out-soft) infinite;
+  }
+
+  .pulse-orbit::after {
+    inset: 11px;
+    background: var(--tone, var(--color-signal));
+    box-shadow: 0 0 18px 2px
+      color-mix(in oklab, var(--tone, var(--color-signal)) 60%, transparent);
+  }
+
+  .pulse-orbit[data-busy="true"]::before {
+    border-top-color: transparent;
+    border-right-color: transparent;
+    animation: beacon-spin 1.1s linear infinite;
+  }
+
+  .pulse-wordmark {
+    animation: wordmark-breathe 3.4s var(--ease-in-out-soft) infinite;
+  }
+
+  /* Typing indicator */
+  .pulse-typing span {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 9999px;
+    background: var(--color-ink-faint);
+    animation: typing-dot 1.15s var(--ease-in-out-soft) infinite;
+  }
+
+  .pulse-typing span:nth-child(2) {
+    animation-delay: 0.14s;
+  }
+
+  .pulse-typing span:nth-child(3) {
+    animation-delay: 0.28s;
+  }
+
+  /* ------------------------------------------------------------------------
+     Panels
+     ------------------------------------------------------------------------ */
+
+  .pulse-enter {
+    animation: panel-rise 420ms var(--ease-out-expo) both;
+  }
+
+  .pulse-enter-fast {
+    animation: panel-fade 260ms var(--ease-out-expo) both;
+  }
+
+  .pulse-bubble {
+    animation: bubble-in 320ms var(--ease-out-expo) both;
+  }
+
+  .pulse-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(132, 178, 224, 0.22) transparent;
+  }
+
+  .pulse-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .pulse-scroll::-webkit-scrollbar-thumb {
+    background: rgba(132, 178, 224, 0.22);
+    border-radius: 9999px;
+  }
+
+  .pulse-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Range input for message length is not used, but form controls should not
+     render a light-mode UA style against our dark surfaces. */
+  input,
+  textarea {
+    caret-color: var(--color-signal);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-ink-faint);
+  }
+
+  .pulse-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
 
-/* Live user dots on the map */
-.pulse-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 9999px;
-  border: 2px solid rgba(255, 255, 255, 0.9);
+/* =========================================================================
+   Mapbox chrome — keep the required logo/attribution, make it quiet.
+
+   mapbox-gl.css is imported from a component, so it lands *after* this file
+   and wins every specificity tie. These overrides are deliberately marked:
+   the alternative is shipping a zoom control underneath the top bar.
+   ========================================================================= */
+
+.mapboxgl-ctrl-attrib.mapboxgl-compact {
+  min-height: 0;
+  margin: 0 0 0.75rem 0.5rem !important;
+}
+
+.mapboxgl-ctrl-attrib-inner {
+  background: color-mix(in oklab, var(--color-void) 78%, transparent) !important;
+  border-radius: 0 0.5rem 0 0 !important;
+  font-size: 10px !important;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+}
+
+.mapboxgl-ctrl-attrib-inner a {
+  color: var(--color-ink-faint) !important;
+  text-decoration: none;
+}
+
+.mapboxgl-ctrl-attrib-button {
+  width: 22px !important;
+  height: 22px !important;
+  border-radius: 6px;
+  background-color: color-mix(in oklab, var(--color-void) 82%, transparent) !important;
+  background-size: 13px !important;
+  opacity: 0.75;
+  transition: opacity 200ms var(--ease-out-expo);
+}
+
+/* Only the glyph is inverted: inverting the whole button would also flip our
+   own dark background straight back to white. */
+.mapboxgl-ctrl-attrib-button .mapboxgl-ctrl-icon {
+  filter: invert(1) opacity(0.85);
+}
+
+.mapboxgl-ctrl-attrib-button:hover {
+  opacity: 1 !important;
+}
+
+.mapboxgl-ctrl-bottom-left .mapboxgl-ctrl-scale {
+  margin: 0 0 0.3rem 0.5rem !important;
+  background: none !important;
+  border: none !important;
+  border-top: 1px solid rgba(160, 188, 218, 0.28) !important;
+  border-left: 1px solid rgba(160, 188, 218, 0.28) !important;
+  border-right: 1px solid rgba(160, 188, 218, 0.28) !important;
+  color: rgba(176, 200, 228, 0.55) !important;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 1px 0.4rem;
+}
+
+/* One offset moves the whole control stack clear of the app's top bar. */
+.mapboxgl-ctrl-top-left {
+  top: calc(var(--topbar-h) + 2.7rem) !important;
+  left: 0.75rem !important;
+}
+
+.mapboxgl-canvas:focus {
+  outline: none;
+}
+
+.mapboxgl-ctrl-group {
+  background: color-mix(in oklab, var(--color-surface) 82%, transparent) !important;
+  border: 1px solid var(--color-hairline-soft) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: none !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  overflow: hidden;
+}
+
+.mapboxgl-ctrl-group button {
+  width: 2.5rem !important;
+  height: 2.5rem !important;
+}
+
+.mapboxgl-ctrl-group button + button {
+  border-top: 1px solid var(--color-hairline-soft) !important;
+}
+
+.mapboxgl-ctrl-group button:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.mapboxgl-ctrl-icon {
+  filter: invert(1) opacity(0.72);
+}
+
+/* Our own "find me" button, sized to match the native zoom controls. */
+.pulse-recenter {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--color-surface) 82%, transparent);
+  color: var(--color-ink-soft);
   cursor: pointer;
-  padding: 0;
-  box-shadow: 0 0 0 rgba(255, 255, 255, 0.5);
-  animation: pulse-ring 2s ease-out infinite;
-  transition: transform 0.1s ease;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition:
+    color 200ms var(--ease-out-expo),
+    background-color 200ms var(--ease-out-expo);
 }
 
-.pulse-dot:hover {
-  transform: scale(1.3);
+.pulse-recenter:hover {
+  color: var(--color-signal);
+  background: color-mix(in oklab, var(--color-surface-2) 88%, transparent);
 }
 
-/* The user's own "you are here" pin — small, sized like the dots. */
-.pulse-me {
-  position: relative;
-  font-size: 18px;
-  line-height: 1;
-  cursor: default;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+/* Markers are plain DOM; keep Mapbox from adding its own positioning quirks. */
+.mapboxgl-marker {
+  will-change: transform;
 }
 
-.pulse-me-label {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 1px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #ffffff;
-  background: rgba(0, 0, 0, 0.6);
-  padding: 0 5px;
-  border-radius: 9999px;
-  white-space: nowrap;
+.mapboxgl-marker.pulse-marker-host {
+  z-index: 1;
 }
 
-@keyframes pulse-ring {
+.mapboxgl-marker.pulse-marker-host[data-state="target"],
+.mapboxgl-marker.pulse-marker-host[data-state="linked"] {
+  z-index: 3;
+}
+
+/* You always sit above the strangers — your light is the one thing on this
+   map that must never be ambiguous. */
+.mapboxgl-marker.pulse-self,
+.mapboxgl-marker.pulse-accuracy {
+  z-index: 4;
+}
+
+/* =========================================================================
+   Keyframes
+   ========================================================================= */
+
+@keyframes beacon-breathe {
   0% {
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4);
+    opacity: 0.15;
+    transform: scale(0.66);
   }
-  70% {
-    box-shadow: 0 0 0 8px rgba(255, 255, 255, 0);
+  45% {
+    opacity: 0.8;
+    transform: scale(1);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+    opacity: 0.15;
+    transform: scale(0.66);
+  }
+}
+
+@keyframes beacon-throb {
+  0%,
+  100% {
+    transform: scale(1.04);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
+
+@keyframes beacon-sweep {
+  0% {
+    transform: scale(0.72) rotate(0deg);
+    opacity: 0.25;
+  }
+  55% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.25) rotate(180deg);
+    opacity: 0.2;
+  }
+}
+
+@keyframes beacon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes wordmark-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.5);
+  }
+}
+
+@keyframes glint {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+.pulse-glint {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: glint 3.2s var(--ease-in-out-soft) infinite;
+}
+
+.pulse-glint-alt {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: glint 3.2s var(--ease-in-out-soft) infinite 0.9s;
+}
+
+.pulse-glint-slow {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: glint 3.2s var(--ease-in-out-soft) infinite 1.8s;
+}
+
+@keyframes panel-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes panel-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+@keyframes sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+.animate-toast-in {
+  animation: toast-in 320ms var(--ease-out-expo) both;
+}
+
+.pulse-sheen {
+  position: relative;
+  overflow: hidden;
+}
+
+.pulse-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in oklab, var(--color-signal) 22%, transparent) 50%,
+    transparent 80%
+  );
+  animation: sheen 1.5s var(--ease-in-out-soft) infinite;
+}
+
+/* =========================================================================
+   Reduced motion — strip every decorative movement. Mapbox camera moves are
+   skipped on its own (we never pass `essential: true`).
+   ========================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
