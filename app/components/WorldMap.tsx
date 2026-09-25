@@ -46,10 +46,14 @@ function peerLabel(state: MarkerState, canConnect: boolean): string {
 }
 
 /**
- * A "find me" control that lives in Mapbox's own control stack. Living inside
- * the stack (instead of an absolutely-positioned button of our own) means the
- * map controls can never drift out of alignment with each other, and a single
- * CSS offset in globals.css moves the whole group below the top bar.
+ * A "find me" control that lives in Mapbox's own control stack, so the map
+ * controls can never drift out of alignment with each other.
+ *
+ * `mapboxgl-ctrl` is not cosmetic here: Mapbox's corner containers are
+ * `pointer-events: none` and only `map.addControl`'s *built-in* controls add
+ * that class themselves, so a custom control without it is invisible to the
+ * pointer and every click lands on the canvas instead. It also brings the
+ * `float: left; clear: both` that stacks the controls vertically.
  */
 class RecenterControl {
   private readonly onRecenter: () => void;
@@ -59,7 +63,7 @@ class RecenterControl {
     this.onRecenter = onRecenter;
     this.button = document.createElement("button");
     this.button.type = "button";
-    this.button.className = "pulse-recenter";
+    this.button.className = "pulse-recenter mapboxgl-ctrl";
     this.button.setAttribute("aria-label", "Find my position on the map");
     this.button.title = "Find me";
     this.button.innerHTML = crosshairSvg;
@@ -184,17 +188,15 @@ export default function WorldMap({
       resizeObserverRef.current = observer;
 
       // Attribution lives bottom-left, stacked above the required Mapbox logo,
-      // so the chat panel on the right can never sit on top of it. The zoom and
-      // recentre controls go top-left for the same reason: on desktop the
-      // conversation owns the right third of the screen.
+      // so the chat panel on the right can never sit on top of it. Zoom and
+      // recentre go top-left for the same reason: on desktop the conversation
+      // owns the right third of the screen. Recentre is added first because
+      // Mapbox appends, which puts it above the zoom-in button.
       map.addControl(new gl.AttributionControl({ compact: true }), "bottom-left");
-      map.addControl(new gl.NavigationControl({ showCompass: false }), "top-left");
       map.addControl(
         new gl.ScaleControl({ maxWidth: 80, unit: "metric" }),
         "bottom-left",
       );
-      // Recentre joins the native stack rather than floating on its own, so
-      // there is exactly one place the map's controls live.
       map.addControl(
         new RecenterControl(() => {
           const location = meRef.current;
@@ -207,6 +209,7 @@ export default function WorldMap({
         }),
         "top-left",
       );
+      map.addControl(new gl.NavigationControl({ showCompass: false }), "top-left");
 
       map.on("error", (event) => {
         // A single tile 404 must not blank the whole planet; only a failure

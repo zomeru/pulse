@@ -599,13 +599,17 @@
   filter: invert(1) opacity(0.72);
 }
 
-/* Our own "find me" button, sized to match the native zoom controls. */
+/* Our own "find me" button, sized to match the native zoom controls.
+   `pointer-events: auto` is stated explicitly: Mapbox's control corners are
+   `pointer-events: none` and inherit down to anything without an explicit
+   opt-in. The `mapboxgl-ctrl` class on the element also supplies Mapbox's
+   own float/clear so the stack lines up with the zoom group. */
 .pulse-recenter {
   display: grid;
   place-items: center;
   width: 2.5rem;
   height: 2.5rem;
-  margin-top: 0.5rem;
+  pointer-events: auto;
   border: 1px solid var(--color-hairline-soft);
   border-radius: 0.75rem;
   background: color-mix(in oklab, var(--color-surface) 82%, transparent);
