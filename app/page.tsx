@@ -1,16 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EntryGate from "./components/EntryGate";
 import WorldMap from "./components/WorldMap";
 import ConnectionPrompt from "./components/ConnectionPrompt";
 import RequestingCard from "./components/RequestingCard";
+import WaveBar from "./components/WaveBar";
 import ChatPanel, { type ChatMessage } from "./components/ChatPanel";
 import VideoPanel from "./components/VideoPanel";
 import NoticeStack, { type Notice } from "./components/NoticeStack";
 import TopBar, { type FlowStage } from "./components/TopBar";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useVisualViewportVar } from "./hooks/useVisualViewport";
+import { useEscapeKey } from "./hooks/useEscapeKey";
 import {
   ApiError,
   join,
@@ -19,6 +21,8 @@ import {
   sendSignal,
 } from "@/lib/api";
 import { PeerSession, type DescType, type PeerControl } from "@/lib/webrtc";
+import { distanceKm, formatKm } from "@/lib/geo";
+import { waveColor } from "@/lib/presence-colors";
 import { POLL_INTERVAL_MS, SIGNAL_TTL_MS } from "@/lib/presence";
 import { type PeerDot, type SignalMsg } from "@/lib/types";
 
@@ -36,6 +40,32 @@ type ActiveConn = {
 type Conn = { kind: "idle" } | ActiveConn;
 
 type VideoState = "none" | "requesting" | "incoming" | "active";
+
+/**
+ * Waves (Phase 4).
+ *
+ * A wave is a one-way hello to a stranger you are *not* in a conversation with:
+ * no reservation, no data channel, no camera, no 30-second wait, and no answer
+ * required. It is the verb Pulse was missing between "look" and "connect".
+ *
+ * All of it is in-memory state on this page. There is no store, no key, no
+ * cookie, and nothing to migrate — a wave is an in-flight gesture between two
+ * browsers that is gone the moment either of them closes the tab, which is the
+ * same promise the rest of the app already makes.
+ */
+type WaveState = {
+  /** The stranger there is a wave thread with, if any. */
+  link: { peerId: string; mutual: boolean } | null;
+  /** Strangers who waved at us, newest first, waiting for an answer. */
+  inbox: string[];
+};
+
+const NO_WAVES: WaveState = { link: null, inbox: [] };
+
+/** How many un-answered waves we hold. A card shows one; the rest queue behind
+ *  it and surface as each is answered, so a stranger's hello is never dropped
+ *  without being seen. */
+const MAX_PENDING_WAVES = 3;
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONNECTION_TIMEOUT_MS = 30_000;
@@ -98,6 +128,24 @@ export default function Home() {
     setVideoState(next);
   };
 
+  // Waves. The ref mirrors the state so the poll loop, async continuations and
+  // the map's imperative marker reconciliation all read the same current value
+  // rather than the copy captured when they were created.
+  const [waves, setWavesState] = useState<WaveState>(NO_WAVES);
+  const wavesRef = useRef<WaveState>(NO_WAVES);
+  const setWaves = useCallback((update: (prev: WaveState) => WaveState) => {
+    const next = update(wavesRef.current);
+    wavesRef.current = next;
+    setWavesState(next);
+  }, []);
+
+  const [waveArmed, setWaveArmed] = useState(false);
+  const waveArmedRef = useRef(false);
+  const setArmed = useCallback((armed: boolean) => {
+    waveArmedRef.current = armed;
+    setWaveArmed(armed);
+  }, []);
+
   const peersRef = useRef<PeerDot[]>([]);
   const incarnationRef = useRef(incarnationId);
   const leftOnPageHide = useRef(false);
@@ -113,6 +161,9 @@ export default function Home() {
   const noticeSeq = useRef(0);
   const pollFailures = useRef(0);
   const lifecycleVersion = useRef(0);
+  /** True once the first poll has landed, so an empty map is never mistaken for
+   *  a map we have not seen yet (which matters when pruning gone strangers). */
+  const peersSeen = useRef(false);
   const endedConnections = useRef(new Set<string>());
   const processedSignals = useRef(new Map<string, number>());
   const pendingSignalAcks = useRef<string[]>([]);
@@ -340,6 +391,9 @@ export default function Home() {
     clearPeerDisconnectTimer();
     clearVideoRequestTimer();
     clearTypingTimer();
+    // A wave belongs to the moment before a conversation, not to the
+    // conversation. Once there is one, the map stops claiming a thread.
+    clearWaves();
 
     // Clear the ref/state before closing WebRTC so synchronous close events
     // cannot re-enter this path or affect a later connection.
@@ -506,6 +560,9 @@ export default function Home() {
     lifecycleVersion.current += 1;
     clearRequestTimer();
     clearMissingPeerTimer();
+    // Asking is a stronger gesture than waving, so it supersedes one. The map
+    // then shows a single story: this is the person you are talking to.
+    clearWaves();
     setConn({ kind: "requesting", ...expected });
 
     void sendSignal({
@@ -553,6 +610,9 @@ export default function Home() {
       connectionId: current.connectionId,
     };
     clearRequestTimer();
+    // Accepting somebody is also a stronger gesture than waving at somebody, so
+    // any wave is done with.
+    clearWaves();
     setConn({ kind: "connecting", ...expected });
     try {
       startPeer(expected.peerId, false, expected.connectionId);
@@ -672,7 +732,190 @@ export default function Home() {
     peerRef.current?.sendControl("typing");
   }
 
+  // ------------------------------------------------------------------ waves
+
+  /** Distance to a stranger, in km, or null if we cannot place them. */
+  function kmBetween(
+    me: { lat: number; lng: number } | null,
+    peer: PeerDot | undefined,
+  ): number | null {
+    if (!me || !peer) return null;
+    return distanceKm(me, peer);
+  }
+
+  /**
+   * Forget every wave.
+   *
+   * A wave is tied to one *moment* with one stranger: it does not survive the
+   * connection it led to, the connection that interrupted it, a session that had
+   * to be re-issued, or the stranger leaving the map. Holding on to any of those
+   * would be a map claiming a thread that is not running.
+   */
+  function clearWaves() {
+    setWaves(() => NO_WAVES);
+    setArmed(false);
+  }
+
+  function toggleWaveTool() {
+    if (connRef.current.kind !== "idle") return;
+    setArmed(!waveArmedRef.current);
+  }
+
+  function revertWave(peerId: string) {
+    setWaves((prev) =>
+      prev.link?.peerId === peerId ? { ...prev, link: null } : prev,
+    );
+  }
+
+  /**
+   * Send one wave.
+   *
+   * Optimistic on purpose: the arc starts the moment you tap, because the whole
+   * point of a wave is that it costs nothing to send. If the server refuses —
+   * they are mid-conversation now, or you have already waved at them — the
+   * thread is taken back down and the map never claimed a connection it does
+   * not have.
+   */
+  function sendWave(peerId: string, { answering = false } = {}) {
+    if (connRef.current.kind !== "idle") return;
+    const alreadyMutual =
+      wavesRef.current.link?.mutual === true &&
+      wavesRef.current.link.peerId === peerId;
+
+    setWaves((prev) => ({
+      link: { peerId, mutual: answering || alreadyMutual },
+      inbox: prev.inbox.filter((id) => id !== peerId),
+    }));
+
+    void sendSignal({
+      fromId: sessionId,
+      toId: peerId,
+      type: "wave",
+      sessionToken: sessionTokenRef.current,
+    })
+      .then((result) => {
+        if (result.waved === false) {
+          revertWave(peerId);
+          showNotice("They're not free right now.");
+          return;
+        }
+        // A wave back is its own feedback — the card changes to "you both
+        // waved" — so a toast here would only compete with it.
+        if (answering) return;
+        const km = kmBetween(
+          myLocationRef.current,
+          peersRef.current.find((peer) => peer.id === peerId),
+        );
+        showNotice(
+          km === null ? "Wave sent." : `Wave sent · about ${formatKm(km)} km.`,
+        );
+      })
+      .catch((error: unknown) => {
+        revertWave(peerId);
+        if (error instanceof ApiError && error.isUnknownSession) {
+          void recoverSession();
+          return;
+        }
+        showNotice(
+          error instanceof ApiError && error.status === 429
+            ? "Hold on a moment before waving again."
+            : "That wave didn't make it. Try again.",
+          "error",
+        );
+      });
+  }
+
+  function waveBack(peerId: string) {
+    sendWave(peerId, { answering: true });
+  }
+
+  /**
+   * Ignore a wave. Nothing is sent — a wave is not a request, so walking away
+   * from one is free, silent, and tells the other side nothing at all.
+   */
+  function ignoreWave(peerId: string) {
+    setWaves((prev) => ({
+      ...prev,
+      inbox: prev.inbox.filter((id) => id !== peerId),
+    }));
+  }
+
+  /**
+   * Take the wave tool back down. While it is on, this only disarms — the thread
+   * you just sent stays, because you might be about to send another. Once it is
+   * off, the same gesture takes back an unanswered wave, which is the only exit
+   * a thread that may never be answered needs.
+   *
+   * Stable, because it is also the Escape handler: it reads the armed flag
+   * through a ref and only touches stable setters, so it never needs to be
+   * re-bound to the current render.
+   */
+  const cancelWaving = useCallback(() => {
+    if (waveArmedRef.current) {
+      setArmed(false);
+      return;
+    }
+    setWaves((prev) =>
+      prev.link && !prev.link.mutual ? { ...prev, link: null } : prev,
+    );
+  }, [setArmed, setWaves]);
+
+  /** True when Escape has something of ours to answer. */
+  const cancelable = waveArmed || Boolean(waves.link && !waves.link.mutual);
+
+  /**
+   * Take up a mutual wave. Both sides already know the other is reachable, so
+   * this is the one request in Pulse that is not a guess.
+   */
+  function connectFromWave(peerId: string) {
+    const peer = peersRef.current.find((candidate) => candidate.id === peerId);
+    if (!peer || peer.busy) {
+      showNotice("They're not free right now.");
+      return;
+    }
+    requestConnection(peerId);
+  }
+
+  /**
+   * The one place a tap on a dot arrives. Armed means "wave", and the mode is
+   * chosen in one place rather than per-marker so the map can draw every
+   * available light as waveable.
+   */
+  function activatePeer(peerId: string) {
+    if (connRef.current.kind !== "idle") return;
+    if (waveArmedRef.current) sendWave(peerId);
+    else requestConnection(peerId);
+  }
+
   function processSignal(signal: SignalMsg) {
+    // A wave is handled *before* the connection guard, not inside the switch
+    // below, because it belongs to no connection and so has no `connectionId` to
+    // get past it. That guard is load-bearing — it is what stops a late terminal
+    // message from resurrecting a connection that has already ended — so the one
+    // message that has no connection gets its own door rather than a weakened
+    // guard.
+    if (signal.type === "wave") {
+      // The server already refuses a self-addressed wave, so this is the
+      // client-side half of the same invariant: a malformed row can never queue
+      // *our own* dot in our own inbox.
+      const from = signal.fromId;
+      if (!from || from === sessionId) return;
+      setWaves((prev) => {
+        if (prev.link?.peerId === from) {
+          // They waved back. One light answered another, and both maps now know
+          // it without either of them ever being told.
+          if (prev.link.mutual) return prev;
+          return { ...prev, link: { peerId: from, mutual: true } };
+        }
+        if (prev.inbox.includes(from)) return prev;
+        return {
+          ...prev,
+          inbox: [from, ...prev.inbox].slice(0, MAX_PENDING_WAVES),
+        };
+      });
+      return;
+    }
+
     const connectionId = signal.connectionId;
     if (!connectionId || endedConnections.current.has(connectionId)) return;
 
@@ -683,6 +926,9 @@ export default function Home() {
           lifecycleVersion.current += 1;
           clearRequestTimer();
           clearMissingPeerTimer();
+          // Being asked is a stronger thing than having waved at somebody, and
+          // two cards at the bottom of the screen is how nobody can read either.
+          clearWaves();
           setConn({
             kind: "incoming",
             peerId: signal.fromId,
@@ -811,6 +1057,28 @@ export default function Home() {
     openSessionRef.current = openSession;
   });
 
+  // A stranger who has left the map cannot be waved at, and a thread pointing at
+  // a dot that is not there is a small lie drawn across the planet. Pruning here
+  // rather than on each wave means one rule covers every way a dot can go —
+  // cleanly, by being reaped, or by losing the connection mid-poll.
+  useEffect(() => {
+    if (!peersSeen.current) return;
+    const present = new Set(peers.map((peer) => peer.id));
+    setWaves((prev) => {
+      const link = prev.link && present.has(prev.link.peerId) ? prev.link : null;
+      const inbox = prev.inbox.filter((id) => present.has(id));
+      if (link === prev.link && inbox.length === prev.inbox.length) return prev;
+      return { link, inbox };
+    });
+  }, [peers, setWaves]);
+
+  // Escape puts the map back to what it does normally. Not while a wave card is
+  // up: there, Escape answers the card, and two answers to one keypress is how
+  // a user ends up dismissing the wrong thing.
+  useEscapeKey(    conn.kind === "idle" && waves.inbox.length === 0 && cancelable,
+    cancelWaving,
+  );
+
   useEffect(() => {
     if (phase !== "live" || !sessionId) return;
     let active = true;
@@ -841,6 +1109,7 @@ export default function Home() {
 
         peersRef.current = data.peers;
         setPeers(data.peers);
+        peersSeen.current = true;
 
         for (const connectionId of data.endedConnectionIds ?? []) {
           endedConnections.current.add(connectionId);
@@ -965,6 +1234,15 @@ export default function Home() {
     setPhase("live");
   }
 
+  // Stable, so the map's marker and wave effects are not re-run by a fresh
+  // object on every render: the map reconciles against this, and it polls every
+  // 1.5 seconds. Above the gate's early return, because hooks may not be called
+  // conditionally.
+  const waveView = useMemo(
+    () => ({ armed: waveArmed, link: waves.link, incoming: waves.inbox }),
+    [waveArmed, waves],
+  );
+
   if (phase === "gate") {
     return <EntryGate onReady={handleReady} />;
   }
@@ -987,14 +1265,29 @@ export default function Home() {
       }
     : null;
 
+  // Waves live on the map, not in the conversation. While a connection is up the
+  // chat owns the screen, so a wave is held rather than shown — the stranger
+  // waiting on the other end sees the same thing (a wave that is never answered)
+  // and nobody gets interrupted mid-sentence.
+  const wavingPeerId = conn.kind === "idle" ? (waves.inbox[0] ?? null) : null;
+  const mutualPeerId =
+    conn.kind === "idle" && waves.link?.mutual ? waves.link.peerId : null;
+  const wavingKm = kmBetween(
+    myLocation,
+    peers.find((peer) => peer.id === wavingPeerId),
+  );
+
   return (
     <main className="fixed inset-x-0 top-0 h-[var(--app-vh)] overflow-hidden bg-void">
       <WorldMap
         peers={peers}
         me={myLocation}
+        selfId={sessionId}
         target={mapTarget}
-        onPeerClick={requestConnection}
+        wave={waveView}
+        onPeerClick={activatePeer}
         canConnect={conn.kind === "idle"}
+        onToggleWave={toggleWaveTool}
       />
 
       <TopBar
@@ -1011,6 +1304,16 @@ export default function Home() {
         <RequestingCard onCancel={cancelRequest} />
       )}
 
+      {/* Only while nothing else owns the bottom of the screen. A wave card and
+          the armed bar are the same slot, and two cards stacked on each other is
+          the Phase 2 failure mode this whole design was meant to end. */}
+      {waveArmed && !wavingPeerId && !mutualPeerId && (
+        <WaveBar
+          sent={Boolean(waves.link && !waves.link.mutual)}
+          onCancel={cancelWaving}
+        />
+      )}
+
       {conn.kind === "incoming" && (
         <ConnectionPrompt
           title="Someone wants to talk"
@@ -1020,6 +1323,44 @@ export default function Home() {
           declineLabel="Not now"
           onAccept={acceptIncoming}
           onDecline={declineIncoming}
+        />
+      )}
+
+      {/* A stranger reached out with nothing attached. Same bottom card, same
+          voice as every other decision in Pulse — but the accent is *their*
+          colour, so for the first time a stranger on this map looks like a
+          particular person rather than a dot. */}
+      {wavingPeerId && (
+        <ConnectionPrompt
+          key={wavingPeerId}
+          title="A stranger waved at you"
+          subtitle={
+            wavingKm === null
+              ? "One light, sent across the map."
+              : `About ${formatKm(wavingKm)} km from where you are.`
+          }
+          detail="No message, no history, nothing kept. Ignore it and they are never told."
+          acceptLabel="Wave back"
+          declineLabel="Ignore"
+          accent={waveColor(sessionId, wavingPeerId)}
+          onAccept={() => waveBack(wavingPeerId)}
+          onDecline={() => ignoreWave(wavingPeerId)}
+        />
+      )}
+
+      {/* The payoff. Two strangers have both put a light out with no obligation
+          attached, so the request that follows is the one request in Pulse that
+          is not a guess. */}
+      {mutualPeerId && (
+        <ConnectionPrompt
+          title="You both waved"
+          subtitle="Neither of you had to say anything."
+          detail="Nothing about this is kept. It ends when you connect, or when one of you leaves."
+          acceptLabel="Connect"
+          declineLabel="Not now"
+          accent={waveColor(sessionId, mutualPeerId)}
+          onAccept={() => connectFromWave(mutualPeerId)}
+          onDecline={clearWaves}
         />
       )}
 

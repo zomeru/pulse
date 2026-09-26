@@ -81,6 +81,14 @@ export const CameraOffIcon = svg(
   </>,
 );
 
+export const RippleIcon = svg(
+  <>
+    <path d="M2.4 12a9.6 9.6 0 0 1 19.2 0" />
+    <path d="M5.8 12a6.2 6.2 0 0 1 12.4 0" />
+    <path d="M9.2 12a2.8 2.8 0 0 1 5.6 0" />
+  </>,
+);
+
 export const LockIcon = svg(
   <>
     <rect x="4.8" y="10.4" width="14.4" height="9.6" rx="3" />

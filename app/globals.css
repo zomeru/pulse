@@ -298,6 +298,91 @@
     border-style: solid;
   }
 
+  /* --- waves --------------------------------------------------------------
+     A thread between two strangers who have both put a light out. It is drawn in
+     `--wave`, the colour both ends derive from the same two session ids, so the
+     marker and the arc on the other screen are the same light.
+     ------------------------------------------------------------------------ */
+
+  .pulse-marker[data-state="waving"],
+  .pulse-marker[data-state="mutual"] {
+    cursor: default;
+  }
+
+  /* Waving — a wave is between us and no answer is due. One slow ring, in the
+     shared colour, and no core glow: this dot is not asking for anything. */
+  .pulse-marker[data-state="waving"] .pulse-marker__glow {
+    opacity: 0;
+  }
+
+  .pulse-marker[data-state="waving"] .pulse-marker__ring {
+    border-color: color-mix(in oklab, var(--wave) 70%, transparent);
+    animation: beacon-breathe 3.6s var(--ease-in-out-soft) infinite;
+  }
+
+  .pulse-marker[data-state="waving"] .pulse-marker__core {
+    width: 10px;
+    height: 10px;
+    background: var(--wave);
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--color-void) 78%, transparent),
+      0 0 18px 1px color-mix(in oklab, var(--wave) 70%, transparent);
+  }
+
+  /* Mutual — they waved back. Two rings at different rates, which is how the rest
+     of the map says "alive", and the only state with a light that persists. */
+  .pulse-marker[data-state="mutual"] {
+    transform: scale(1.18);
+  }
+
+  .pulse-marker[data-state="mutual"] .pulse-marker__glow {
+    opacity: 0.75;
+    transform: scale(1);
+    background: radial-gradient(
+      circle,
+      color-mix(in oklab, var(--wave) 58%, transparent) 0%,
+      transparent 66%
+    );
+  }
+
+  .pulse-marker[data-state="mutual"] .pulse-marker__ring {
+    border-color: color-mix(in oklab, var(--wave) 62%, transparent);
+    animation: beacon-breathe 2.9s var(--ease-in-out-soft) infinite;
+  }
+
+  /* A second ring, so "mutual" reads as two people even on a 36px dot where a
+     second element would otherwise be invisible. */
+  .pulse-marker[data-state="mutual"]::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border-radius: inherit;
+    border: 1px solid color-mix(in oklab, var(--wave) 34%, transparent);
+    animation: beacon-breathe 4.3s var(--ease-in-out-soft) infinite;
+    animation-delay: calc(var(--i, 0) * -0.2s);
+  }
+
+  .pulse-marker[data-state="mutual"] .pulse-marker__core {
+    width: 10px;
+    height: 10px;
+    background: var(--wave);
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--color-void) 78%, transparent),
+      0 0 20px 2px color-mix(in oklab, var(--wave) 75%, transparent);
+  }
+
+  /* The wave tool is armed, so a tap on any light means something different. A
+     class on the container rather than a seventh marker state: arming is a
+     property of the map, not of any one dot. */
+  .pulse-wave-armed .pulse-marker[data-state="idle"] .pulse-marker__ring {
+    border-color: color-mix(in oklab, var(--color-signal) 60%, transparent);
+    animation: beacon-breathe 2.4s var(--ease-in-out-soft) infinite;
+  }
+
+  .pulse-wave-armed .pulse-marker[data-state="idle"] .pulse-marker__glow {
+    opacity: 0.7;
+  }
+
   /* --- yourself -------------------------------------------------------- */
 
   .pulse-self {
@@ -662,6 +747,60 @@
   background: color-mix(in oklab, var(--color-surface-2) 88%, transparent);
 }
 
+/* The wave tool. It is the only control in the stack that is a *mode* rather
+   than an action, so the armed state has to be unmissable: the icon fills, the
+   plate takes the signal colour, and a ring breathes around it. A mode you have
+   to remember you turned on is a mode that will bite somebody. */
+.pulse-wave-control {
+  position: relative;
+}
+
+.pulse-wave-control.is-armed {
+  color: var(--color-signal);
+  border-color: color-mix(in oklab, var(--color-signal) 45%, transparent);
+  background: color-mix(in oklab, var(--color-signal) 14%, transparent);
+}
+
+.pulse-wave-control.is-armed::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 1px solid color-mix(in oklab, var(--color-signal) 45%, transparent);
+  animation: beacon-breathe 2.4s var(--ease-in-out-soft) infinite;
+  pointer-events: none;
+}
+
+/* A wave that arrived while you were mid-conversation is held, not shown. This
+   is where it waits: a count, so it is obvious it is a queue and not an error. */
+.pulse-wave-control__badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 3px;
+  border-radius: 9999px;
+  background: var(--color-signal);
+  color: var(--color-void);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-void) 70%, transparent);
+}
+
+.pulse-wave-control__badge:empty {
+  min-width: 0.625rem;
+  width: 0.625rem;
+  height: 0.625rem;
+  padding: 0;
+  top: -2px;
+  right: -2px;
+}
+
 /* Markers are plain DOM; keep Mapbox from adding its own positioning quirks. */
 .mapboxgl-marker {
   will-change: transform;
@@ -674,6 +813,12 @@
 .mapboxgl-marker.pulse-marker-host[data-state="target"],
 .mapboxgl-marker.pulse-marker-host[data-state="linked"] {
   z-index: 3;
+}
+
+/* A wave thread is worth as much attention as a live connection, and never more:
+   it is a stranger, not a conversation. */
+.mapboxgl-marker.pulse-marker-host[data-state="mutual"] {
+  z-index: 2;
 }
 
 /* You always sit above the strangers — your light is the one thing on this

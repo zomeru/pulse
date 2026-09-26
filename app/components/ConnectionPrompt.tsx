@@ -21,6 +21,7 @@ export default function ConnectionPrompt({
   acceptLabel,
   declineLabel,
   tone = "signal",
+  accent,
   onAccept,
   onDecline,
 }: {
@@ -30,16 +31,24 @@ export default function ConnectionPrompt({
   acceptLabel: string;
   declineLabel: string;
   tone?: "signal" | "self" | "alert";
+  /**
+   * Overrides the beacon colour with a specific one. Used by waves, where the
+   * colour is a shared derivation of the two session ids rather than one of the
+   * three app roles — so the card is about a particular stranger, not about
+   * something the app is asking.
+   */
+  accent?: string;
   onAccept: () => void;
   onDecline: () => void;
 }) {
   const acceptRef = useRef<HTMLButtonElement>(null);
   const toneVar =
-    tone === "alert"
+    accent ??
+    (tone === "alert"
       ? "var(--color-alert)"
       : tone === "self"
         ? "var(--color-self)"
-        : "var(--color-signal)";
+        : "var(--color-signal)");
 
   useEffect(() => {
     acceptRef.current?.focus();
@@ -104,9 +113,15 @@ export default function ConnectionPrompt({
             type="button"
             ref={acceptRef}
             onClick={onAccept}
+            style={accent ? { ["--tone" as string]: accent } : undefined}
             className={cn(
               "min-h-11 flex-[1.35] rounded-2xl px-4 text-sm font-semibold",
-              "bg-signal text-void transition-[background-color,transform] hover:bg-[#7bf7d6] active:scale-[0.98]",
+              // An accented card's action is that stranger's colour, so the thing
+              // you are agreeing to and the light on the map are visibly the
+              // same light.
+              accent
+                ? "bg-[var(--tone)] text-void transition-[background-color,transform] hover:brightness-110 active:scale-[0.98]"
+                : "bg-signal text-void transition-[background-color,transform] hover:bg-[#7bf7d6] active:scale-[0.98]",
             )}
           >
             {acceptLabel}
