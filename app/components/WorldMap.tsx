@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Map as MapboxMap, Marker } from "mapbox-gl";
 import type { PeerDot } from "@/lib/types";
-import { peerColor, peerPhase } from "@/lib/presence-colors";
+import { peerColor, peerPhase, waveColor } from "@/lib/presence-colors";
 import { restyleMap, setPaint } from "@/app/lib/map-style";
 
 const TOKEN =
@@ -12,18 +12,44 @@ const TOKEN =
   "pk.eyJ1IjoicHVsc2UtbWFwIiwiYSI6ImNrMDBkZW1vMDAwMDAwMDAifQ.AAAAAAAAAAAAAAAAAAAAAA";
 
 const LINK_SOURCE = "pulse-link";
+const WAVE_SOURCE = "pulse-wave";
 /** How long to wait for the map to have a real box before giving up. */
 const LAYOUT_FRAMES = 30;
 /** Never hold the splash screen longer than this, even if a tile is slow. */
 const READY_FALLBACK_MS = 8_000;
+/** How long the light takes to cross from one dot to the other. */
+const WAVE_TRAVEL_MS = 1150;
+/** How far the arc bows off the straight line, as a fraction of its own length
+ *  and a hard cap in degrees. A dead-straight line reads as a wire; a curve
+ *  reads as something travelling. */
+const WAVE_BOW_RATIO = 0.16;
+const WAVE_BOW_MAX = 18;
 
-type MarkerState = "idle" | "busy" | "target" | "linked";
+type MarkerState =
+  | "idle"
+  | "busy"
+  | "target"
+  | "linked"
+  | "waving"
+  | "mutual";
+
+/** What the map needs to know about waves. Deliberately not the whole state
+ *  machine: the map draws threads, the app decides whether they are real. */
+export interface WaveView {
+  /** The wave tool is armed — a tap on a dot waves instead of connecting. */
+  armed: boolean;
+  /** The stranger a thread runs to, and whether it has been answered. */
+  link: { peerId: string; mutual: boolean } | null;
+  /** Strangers waiting to be waved back. */
+  incoming: string[];
+}
 
 type PeerEntry = {
   marker: Marker;
   element: HTMLButtonElement;
   /** `""` until the first reconcile, so the initial state always writes. */
   state: MarkerState | "";
+  armed: boolean;
   label: HTMLSpanElement;
 };
 
@@ -39,9 +65,26 @@ const crosshairSvg =
   '<circle cx="12" cy="12" r="7.2"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>' +
   '<path d="M12 1.8v3.2M12 19v3.2M22.2 12H19M5 12H1.8"/></svg>';
 
-function peerLabel(state: MarkerState, canConnect: boolean): string {
+const waveSvg =
+  '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M2.4 12a9.6 9.6 0 0 1 19.2 0"/>' +
+  '<path d="M5.8 12a6.2 6.2 0 0 1 12.4 0"/>' +
+  '<path d="M9.2 12a2.8 2.8 0 0 1 5.6 0"/></svg>';
+
+function peerLabel(
+  state: MarkerState,
+  canConnect: boolean,
+  armed: boolean,
+  incoming: boolean,
+): string {
   if (state === "busy") return "In a conversation";
   if (state === "target" || state === "linked") return "Your connection";
+  if (state === "mutual") return "You both waved";
+  if (state === "waving") {
+    return incoming ? "Waved at you" : "Wave sent · no answer needed";
+  }
+  if (armed && canConnect) return "Tap to wave";
   return canConnect ? "Tap to connect" : "Unavailable";
 }
 
@@ -80,6 +123,102 @@ class RecenterControl {
 }
 
 /**
+ * The wave tool, in the same control stack.
+ *
+ * It is a real `aria-pressed` toggle, so the mode is reachable from the
+ * keyboard and announced, and the badge is how a wave that arrived while you were
+ * mid-conversation gets to you afterwards: it is held rather than shown (the chat
+ * owns the screen), and this is where it waits without interrupting anything.
+ */
+class WaveControl {
+  private readonly button: HTMLButtonElement;
+  private readonly badge: HTMLSpanElement;
+  private readonly onToggle: () => void;
+
+  constructor(onToggle: () => void) {
+    this.onToggle = onToggle;
+    this.button = document.createElement("button");
+    this.button.type = "button";
+    this.button.className = "pulse-recenter pulse-wave-control mapboxgl-ctrl";
+    this.button.setAttribute("aria-pressed", "false");
+    this.button.setAttribute("aria-label", "Wave instead of connecting");
+    this.button.title = "Wave instead of connecting";
+
+    this.badge = document.createElement("span");
+    this.badge.className = "pulse-wave-control__badge";
+    this.badge.hidden = true;
+    this.badge.setAttribute("aria-hidden", "true");
+
+    this.button.innerHTML = waveSvg;
+    this.button.appendChild(this.badge);
+    this.button.addEventListener("click", () => this.onToggle());
+  }
+
+  onAdd(): HTMLElement {
+    return this.button;
+  }
+
+  onRemove(): void {
+    this.button.remove();
+  }
+
+  set(armed: boolean, waiting: number): void {
+    this.button.setAttribute("aria-pressed", String(armed));
+    this.button.classList.toggle("is-armed", armed);
+    this.button.classList.toggle("has-waiting", waiting > 0);
+    const label = armed
+      ? "Stop waving"
+      : waiting > 0
+        ? `Wave instead of connecting. ${waiting} ${waiting === 1 ? "stranger has" : "strangers have"} waved at you.`
+        : "Wave instead of connecting";
+    this.button.setAttribute("aria-label", label);
+    this.button.title = label;
+    this.badge.hidden = waiting === 0;
+    this.badge.textContent = waiting > 1 ? String(waiting) : "";
+  }
+}
+
+/**
+ * The path a wave takes: a three-point arc bowed off the straight line between
+ * the two dots.
+ *
+ * The longitudes are normalised first, which matters more than the bow. Two
+ * lights either side of the antimeridian are close together, and a LineString
+ * from -179 to +179 draws the long way round — a wave would cross the entire
+ * planet to reach the person standing next to it.
+ */
+function waveArc(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+): [number, number][] {
+  let deltaLng = to.lng - from.lng;
+  if (deltaLng > 180) deltaLng -= 360;
+  if (deltaLng < -180) deltaLng += 360;
+  const endLng = from.lng + deltaLng;
+
+  const deltaLat = to.lat - from.lat;
+  const span = Math.hypot(deltaLng, deltaLat);
+  if (span < 1e-6) {
+    return [
+      [from.lng, from.lat],
+      [endLng, to.lat],
+    ];
+  }
+
+  const bow = Math.min(span * WAVE_BOW_RATIO, WAVE_BOW_MAX);
+  // Perpendicular to the chord, in degree space. The bow is a gesture, not a
+  // measurement, so an unprojected one is fine and needs no math.
+  const midLng = from.lng + deltaLng / 2 - (deltaLat / span) * bow;
+  const midLat = (from.lat + to.lat) / 2 + (deltaLng / span) * bow;
+
+  return [
+    [from.lng, from.lat],
+    [(((midLng + 180) % 360) + 360) % 360 - 180, midLat],
+    [endLng, to.lat],
+  ];
+}
+
+/**
  * The zoom at which the whole world exactly spans `width` pixels.
  *
  * Without it, a wide viewport can reach Mapbox's low zoom levels where the
@@ -98,16 +237,26 @@ function worldFitsZoom(map: MapboxMap, width: number): number {
 export default function WorldMap({
   peers,
   me,
+  selfId,
   target,
+  wave,
   onPeerClick,
   canConnect,
+  onToggleWave,
 }: {
   peers: PeerDot[];
   me: { lat: number; lng: number } | null;
+  /**
+   * Our own session id. Not needed to draw a dot — only to derive the shared wave
+   * colour, which both ends must agree on without ever being sent.
+   */
+  selfId: string;
   /** The peer this session is currently negotiating with, if any. */
   target: { peerId: string; state: "target" | "linked" } | null;
+  wave: WaveView;
   onPeerClick: (id: string) => void;
   canConnect: boolean;
+  onToggleWave: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapboxMap | null>(null);
@@ -115,6 +264,11 @@ export default function WorldMap({
   const selfMarkerRef = useRef<Marker | null>(null);
   const accuracyRef = useRef<Marker | null>(null);
   const linkFrame = useRef<number | null>(null);
+  const waveFrame = useRef<number | null>(null);
+  const waveControlRef = useRef<WaveControl | null>(null);
+  /** Identity of the thread currently drawn, so a re-render (or the 1.5s poll
+   *  that changes `peers`) does not restart the sweep that carries the light. */
+  const waveDrawn = useRef("");
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -125,11 +279,13 @@ export default function WorldMap({
   const canConnectRef = useRef(canConnect);
   const targetRef = useRef(target);
   const meRef = useRef(me);
+  const waveRef = useRef(wave);
   useEffect(() => {
     onPeerClickRef.current = onPeerClick;
     canConnectRef.current = canConnect;
     targetRef.current = target;
     meRef.current = me;
+    waveRef.current = wave;
   });
 
   // ---------------------------------------------------------------- map init
@@ -227,6 +383,11 @@ export default function WorldMap({
         }),
         "top-left",
       );
+      // Wave, then zoom, then recentre: Mapbox appends, so this reads as
+      // "gesture, then navigation".
+      const waveControl = new WaveControl(() => onToggleWave());
+      waveControlRef.current = waveControl;
+      map.addControl(waveControl, "top-left");
       map.addControl(new gl.NavigationControl({ showCompass: false }), "top-left");
 
       map.on("error", (event) => {
@@ -291,11 +452,60 @@ export default function WorldMap({
               ],
             },
           });
+
+          // --- waves -------------------------------------------------------
+          // A separate source and pair of layers, not a second feature on the
+          // link line: a wave and a connection are never both running (asking
+          // supersedes waving), and they must never be able to overwrite each
+          // other's `line-progress` mid-animation.
+          map.addSource(WAVE_SOURCE, {
+            type: "geojson",
+            data: EMPTY_LINE,
+            lineMetrics: true,
+          });
+          map.addLayer({
+            id: `${WAVE_SOURCE}-glow`,
+            type: "line",
+            source: WAVE_SOURCE,
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: {
+              "line-color": "rgba(95, 240, 200, 0.2)",
+              "line-width": 9,
+              "line-blur": 7,
+              "line-opacity": 0,
+            },
+          });
+          map.addLayer({
+            id: `${WAVE_SOURCE}-core`,
+            type: "line",
+            source: WAVE_SOURCE,
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: {
+              // Repainted per-thread from the shared wave colour.
+              "line-color": "rgba(150, 255, 226, 0.9)",
+              "line-width": 1.6,
+              "line-dasharray": [3, 4],
+              "line-opacity": 0,
+              // The light is a gradient revealed by `line-progress`, not a dot
+              // moving along the path: a gradient needs no projection maths, no
+              // extra DOM node, and cannot drift out of sync with the camera.
+              "line-gradient": [
+                "interpolate",
+                ["linear"],
+                ["line-progress"],
+                0,
+                "rgba(255, 255, 255, 0)",
+                0.3,
+                "rgba(255, 255, 255, 0.95)",
+                1,
+                "rgba(255, 255, 255, 0.1)",
+              ],
+            },
+          });
         } catch {
           // The link line is decoration; a style that rejects it still works.
         }
       };
-
       map.on("style.load", () => {
         if (cancelled) return;
         applyStyle();
@@ -349,6 +559,12 @@ export default function WorldMap({
         window.cancelAnimationFrame(linkFrame.current);
         linkFrame.current = null;
       }
+      if (waveFrame.current !== null) {
+        window.cancelAnimationFrame(waveFrame.current);
+        waveFrame.current = null;
+      }
+      waveDrawn.current = "";
+      waveControlRef.current = null;
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
       peersRef.current = entries;
@@ -489,6 +705,7 @@ export default function WorldMap({
             element: el,
             label: el.querySelector(".pulse-marker__label") as HTMLSpanElement,
             state: "",
+            armed: false,
           };
           entries.set(peer.id, entry);
         }
@@ -498,28 +715,58 @@ export default function WorldMap({
         // The peer you are negotiating with wins over everything else: while a
         // request is out the server already marks them busy, and rendering a
         // dimmed "unavailable" dot while we are literally asking them to talk
-        // would be a lie.
-        const state: MarkerState =
-          active?.peerId === peer.id
+        // would be a lie. A wave thread wins next: it is the only other thing
+        // this dot is to us right now.
+        const thread = waveRef.current;
+        const isLink = thread?.link?.peerId === peer.id;
+        const isWavingIn = thread?.incoming.includes(peer.id) === true;
+        const state: MarkerState = isLink
+          ? thread.link?.mutual
+            ? "mutual"
+            : "waving"
+          : active?.peerId === peer.id
             ? active.state
             : !canConnectRef.current || peer.busy
               ? "busy"
               : "idle";
 
-        if (entry.state !== state) {
-          entry.element.dataset.state = state;
+        if (entry.state !== state || entry.armed !== thread?.armed) {
           entry.state = state;
+          entry.armed = thread?.armed === true;
           const interactive = state === "idle";
+          entry.element.dataset.state = state;
+          // The wave colour both ends derive from the same two ids, so the two
+          // markers on two screens are the same light. Only meaningful when a
+          // thread exists; otherwise the marker keeps its own beacon colour.
+          if (isLink) {
+            entry.element.style.setProperty(
+              "--wave",
+              waveColor(selfId, peer.id),
+            );
+          }
           entry.element.setAttribute("aria-disabled", String(!interactive));
           entry.element.setAttribute(
             "aria-label",
             interactive
-              ? "Anonymous stranger on the map. Tap to request a connection."
+              ? thread?.armed
+                ? "Anonymous stranger on the map. Tap to send them a wave."
+                : "Anonymous stranger on the map. Tap to request a connection."
               : state === "busy"
                 ? "Anonymous stranger already in a conversation"
-                : "Stranger you are connecting with",
+                : state === "mutual"
+                  ? "Stranger who waved back. You can connect."
+                  : state === "waving"
+                    ? isWavingIn
+                      ? "Stranger who waved at you"
+                      : "Stranger you waved at. No answer is needed."
+                    : "Stranger you are connecting with",
           );
-          entry.label.textContent = peerLabel(state, canConnectRef.current);
+          entry.label.textContent = peerLabel(
+            state,
+            canConnectRef.current,
+            thread?.armed === true,
+            isWavingIn,
+          );
         }
       }
 
@@ -534,7 +781,7 @@ export default function WorldMap({
     return () => {
       cancelled = true;
     };
-  }, [peers, ready, target]);
+  }, [peers, ready, target, wave, selfId]);
 
   // ------------------------------------------------------------- link + camera
   useEffect(() => {
@@ -584,6 +831,98 @@ export default function WorldMap({
       linkFrame.current = requestAnimationFrame(step);
     }
   }, [target, peers, me, ready]);
+
+  // -------------------------------------------------------------------- waves
+  //
+  // One thread, one arc, one light. The animation is keyed on the *identity* of
+  // the thread rather than on this effect's dependencies, because `peers` changes
+  // every 1.5 seconds: without that guard the light would restart its journey
+  // across the world on every poll.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    const source = map.getSource(WAVE_SOURCE) as
+      | { setData(data: unknown): void }
+      | undefined;
+    if (!source) return;
+
+    if (waveFrame.current !== null) {
+      window.cancelAnimationFrame(waveFrame.current);
+      waveFrame.current = null;
+    }
+
+    const link = wave.link;
+    const peer = link
+      ? peers.find((candidate) => candidate.id === link.peerId)
+      : undefined;
+    if (!link || !me || !peer) {
+      source.setData(EMPTY_LINE);
+      waveDrawn.current = "";
+      setPaint(map, `${WAVE_SOURCE}-core`, "line-opacity", 0);
+      setPaint(map, `${WAVE_SOURCE}-glow`, "line-opacity", 0);
+      return;
+    }
+
+    const key = `${peer.id}:${link.mutual ? "mutual" : "out"}`;
+    if (waveDrawn.current === key) return;
+    waveDrawn.current = key;
+
+    source.setData({
+      type: "Feature",
+      properties: {},
+      geometry: { type: "LineString", coordinates: waveArc(me, peer) },
+    });
+
+    // One shared colour, and it replaces the app's signal green: this arc is not
+    // the app talking, it is a light that belongs to the two people on it.
+    const colour = waveColor(selfId, peer.id);
+    setPaint(map, `${WAVE_SOURCE}-core`, "line-color", colour);
+    setPaint(map, `${WAVE_SOURCE}-glow`, "line-color", colour);
+    setPaint(map, `${WAVE_SOURCE}-core`, "line-opacity", 1);
+    setPaint(map, `${WAVE_SOURCE}-glow`, "line-opacity", 1);
+
+    // Reduced motion gets the same picture with the light already arrived, which
+    // is the honest translation: the information is "a wave is between these two
+    // dots", not "something moved".
+    if (prefersReducedMotion()) {
+      setPaint(map, `${WAVE_SOURCE}-core`, "line-progress", 1);
+      setPaint(map, `${WAVE_SOURCE}-glow`, "line-progress", 1);
+      if (link.mutual) {
+        setPaint(map, `${WAVE_SOURCE}-core`, "line-opacity", 0.6);
+        setPaint(map, `${WAVE_SOURCE}-glow`, "line-opacity", 0.35);
+      }
+      return;
+    }
+
+    const mutual = link.mutual;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / WAVE_TRAVEL_MS);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setPaint(map, `${WAVE_SOURCE}-core`, "line-progress", eased);
+      setPaint(map, `${WAVE_SOURCE}-glow`, "line-progress", eased);
+      if (t < 1) {
+        waveFrame.current = requestAnimationFrame(step);
+        return;
+      }
+      // Arrived. An unanswered wave settles back to a quiet thread rather than
+      // staying lit: a wave needs no answer, and a line that keeps asking is a
+      // line the map should not draw.
+      waveFrame.current = null;
+      setPaint(map, `${WAVE_SOURCE}-core`, "line-opacity", mutual ? 0.62 : 0.34);
+      setPaint(map, `${WAVE_SOURCE}-glow`, "line-opacity", mutual ? 0.4 : 0.16);
+    };
+    waveFrame.current = requestAnimationFrame(step);
+  }, [wave, peers, me, ready, selfId]);
+
+  // The tool's armed state and its waiting badge. Kept out of the map's init
+  // effect so arming costs no re-initialisation and no listener. The container
+  // class is how every available dot learns it is waveable.
+  useEffect(() => {
+    waveControlRef.current?.set(wave.armed, wave.incoming.length);
+    containerRef.current?.classList.toggle("pulse-wave-armed", wave.armed);
+  }, [wave]);
 
   // Frame both ends of a live connection. This is a deliberate camera move on a
   // real state change, not a hijack: without it, accepting a request from
