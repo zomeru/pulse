@@ -8,6 +8,16 @@ export type PeerControl =
   // same data channel as chat. Never persisted, never seen by the server.
   | "typing";
 
+// What travels on the data channel is deliberately *only* what belongs to the two
+// people already talking: chat, call control, and the typing indicator.
+//
+// A wave (Phase 4) is a message to a stranger you are not in a conversation with,
+// so it cannot come through here — there is no channel to it. It rides the same
+// transient signal mailbox a connection request uses, and the same rules apply:
+// nothing is stored, nothing is logged, and the row is gone within a minute.
+// Pushing it through the server is the honest choice; inventing a second
+// out-of-band transport for it would be the one that needed justifying.
+
 interface PeerCallbacks {
   onSignal: (type: DescType, payload: string) => void;
   onChat: (text: string) => void;

@@ -38,3 +38,21 @@ export function peerColor(id: string): string {
 export function peerPhase(id: string): number {
   return hash(id) % 8;
 }
+
+/**
+ * The colour of a wave, agreed by both ends without ever being agreed *on*.
+ *
+ * `peerColor` is a function of one id, so two people holding the same two ids
+ * can derive the same colour independently — no round trip, no shared state, and
+ * nothing stored. Ordering the pair first makes it commutative, which is the
+ * whole point: whoever sends the wave and whoever receives it must end up looking
+ * at the same light travelling between the same two dots.
+ *
+ * The pleasant accident: because a peer's colour is stable for the life of their
+ * session, a wave is the first time a stranger's colour becomes *yours*. It is
+ * the closest thing to recognising a face Pulse can offer, and it costs nothing
+ * to revoke — close the tab and the colour is a different one next time.
+ */
+export function waveColor(a: string, b: string): string {
+  return peerColor(a < b ? a : b);
+}
