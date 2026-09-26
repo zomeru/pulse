@@ -22,6 +22,7 @@ export const SIGNAL_TYPES: readonly SignalType[] = [
   "answer",
   "ice",
   "end",
+  "wave",
 ];
 
 export function isSessionId(value: unknown): value is string {
@@ -59,6 +60,10 @@ export const MAX_ACK_IDS = 100;
 /**
  * Only SDP and ICE carry a payload. Letting `request`/`decline`/`end` carry one
  * would just be a way to push 64 KB of junk into someone's mailbox.
+ *
+ * A `wave` is in the same group, and more strongly so: a wave is *only* a wave.
+ * It has no room for a message, so there is nothing in it that could carry a
+ * claim about the person who sent it.
  */
 export function payloadLimitFor(type: SignalType): number {
   switch (type) {

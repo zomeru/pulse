@@ -8,7 +8,12 @@ export type SignalType =
   | "offer" // WebRTC SDP offer
   | "answer" // WebRTC SDP answer
   | "ice" // WebRTC ICE candidate
-  | "end"; // hang up / leave the connection
+  | "end" // hang up / leave the connection
+  | "wave"; // one-way hello to a stranger you are *not* in a conversation with
+//             (Phase 4). Carries no payload, reserves nothing, and is the only
+//             type that is legitimate outside a connection: there is no
+//             connection to join and no data channel to relay it on, so it rides
+//             the same transient mailbox a request does.
 
 export interface PeerDot {
   id: string;

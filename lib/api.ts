@@ -96,14 +96,21 @@ export interface SignalRequest {
   fromId: string;
   toId: string;
   type: SignalType;
-  connectionId: string;
   sessionToken: string;
+  /**
+   * Required for every type that belongs to a conversation. A `wave` belongs to
+   * none, and the server rejects one that supplies a token — so it is omitted
+   * rather than sent as an empty string.
+   */
+  connectionId?: string;
   payload?: string;
 }
 
 export interface SignalResult {
   /** The target was gone or already busy, so no reservation was made. */
   autoDeclined?: boolean;
+  /** A wave was sent, and the target is free and fresh. */
+  waved?: boolean;
   /** The connection had already been torn down; nothing to do. */
   ended?: boolean;
   /** The caller was not a participant in the connection it named. */
@@ -113,10 +120,15 @@ export interface SignalResult {
 export async function sendSignal(
   request: SignalRequest,
 ): Promise<SignalResult> {
+  // Never send `connectionId: undefined` as a JSON key: the server rejects a
+  // wave that carries one, and "present but undefined" would be indistinguishable
+  // from a caller that meant to attach it.
+  const body: SignalRequest = { ...request };
+  if (body.connectionId === undefined) delete body.connectionId;
   const response = await fetch("/api/signal", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
+    body: JSON.stringify(body),
   });
   await assertOk(response, "signal");
   return (await response.json()) as SignalResult;

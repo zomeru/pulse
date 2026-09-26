@@ -144,6 +144,15 @@ export const SIGNAL_LIMITS = {
   // control: without it a script can keep a stranger's prompt alive by asking,
   // declining, asking again.
   requestCooldown: { limit: 1, windowMs: 3_000 } satisfies LimitRule,
+  // A wave is a single empty message, so there is nothing in it to abuse — but
+  // it still lands on somebody's screen, and an empty message that keeps
+  // arriving is harassment with the payload left out. Two shapes worth
+  // bounding: hammering *one* stranger, and spraying the whole map.
+  // 1 per 20s per ordered pair is unhurried for a human (you get one thought
+  // about it) and impossible to automate; 20/minute per session is far more
+  // than waving honestly.
+  wavePerTarget: { limit: 1, windowMs: 20_000 } satisfies LimitRule,
+  wavePerSession: { limit: 20, windowMs: 60_000 } satisfies LimitRule,
 };
 
 export const LEAVE_LIMITS = {
