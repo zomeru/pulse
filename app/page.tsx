@@ -1281,6 +1281,10 @@ export default function Home() {
     myLocation,
     peers.find((peer) => peer.id === wavingPeerId),
   );
+  // How many lights a wave would actually reach, so the armed bar can tell the
+  // truth on an empty map. Cheap, and it is recomputed from the same poll data
+  // the map is already drawing.
+  const waveableCount = peers.filter((peer) => !peer.busy).length;
 
   return (
     <main className="fixed inset-x-0 top-0 h-[var(--app-vh)] overflow-hidden bg-void">
@@ -1309,11 +1313,13 @@ export default function Home() {
         <RequestingCard onCancel={cancelRequest} />
       )}
 
-      {/* Only while nothing else owns the bottom of the screen. A wave card and
-          the armed bar are the same slot, and two cards stacked on each other is
-          the Phase 2 failure mode this whole design was meant to end. */}
+      {/* Only while nothing else owns the bottom of the screen. A wave card, a
+          request card and this bar are the same slot, and two cards stacked on
+          each other is the Phase 2 failure mode this whole design was meant to
+          end. */}
       {waveArmed && !wavingPeerId && !mutualPeerId && (
         <WaveBar
+          available={waveableCount}
           sent={Boolean(waves.link && !waves.link.mutual)}
           onCancel={cancelWaving}
         />

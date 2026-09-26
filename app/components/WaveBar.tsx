@@ -15,20 +15,32 @@ import { CloseIcon, RippleIcon } from "./Icon";
  * people never find, and the whole of "what does this button do" fits in one
  * sentence that is only ever on screen while the mode is on.
  *
- * When a wave is already out, the sentence changes to describe the way back:
- * an unanswered thread has to be takeable, or a map can end up showing a
+ * Two things it has to get right, both of which the first version did not:
+ *
+ *  - **It may be armed with nobody to wave at.** "Tap any light" is a lie on an
+ *    empty map, and the empty map is the screen most first-time users ever see.
+ *    So the sentence says what is actually true.
+ *  - **It must not cover Mapbox's attribution.** That credit is required, and on
+ *    a phone it lives in this exact corner. The bottom inset matches the map's
+ *    own notes for that reason.
+ *
+ * When a wave is already out, the sentence changes to describe the way back: an
+ * unanswered thread has to be takeable, or a map can end up showing a
  * conversation that is not going to happen.
  */
 export default function WaveBar({
+  available,
   sent,
   onCancel,
 }: {
+  /** Strangers on the map that a wave would actually reach. */
+  available: number;
   sent: boolean;
   onCancel: () => void;
 }) {
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[calc(1rem+var(--safe-b))] sm:px-5 sm:pb-8"
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[calc(2rem+var(--safe-b))] sm:px-5 sm:pb-8"
       role="status"
       aria-live="polite"
     >
@@ -43,9 +55,11 @@ export default function WaveBar({
         <div className="min-w-0 flex-1">
           <p className="pulse-label text-signal">Waving</p>
           <p className="mt-1 text-[0.8125rem] leading-snug text-ink-soft">
-            {sent
-              ? "One is out there. Tap another light, or take it back."
-              : "Tap any light to send one wave. No answer needed, and nothing is saved."}
+            {available === 0
+              ? "Nobody to wave at yet. The map fills as people arrive."
+              : sent
+                ? "One is out there. Tap another light, or take it back."
+                : "Tap any light to send one wave. No answer needed, and nothing is saved."}
           </p>
         </div>
 

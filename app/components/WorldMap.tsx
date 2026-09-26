@@ -974,6 +974,11 @@ export default function WorldMap({
 
   const hasPeers = peers.length > 0;
   const hasAvailable = peers.some((peer) => !peer.busy);
+  // The armed bar and the map notes share the bottom of the screen, and only one
+  // of them can be the thing you look at. While the tool is on, the bar is the
+  // more actionable of the two — and it also says whether there is anybody to
+  // wave at, which the notes do not.
+  const notesHidden = wave.armed;
 
   return (
     <div className="absolute inset-0">
@@ -1020,7 +1025,7 @@ export default function WorldMap({
       ) : null}
 
       {/* Empty state — the screen most first-time users will ever see. */}
-      {ready && !hasPeers && (
+      {ready && !notesHidden && !hasPeers && (
         <MapNote
           title="Nobody else is here yet"
           body="The map fills as people arrive. You’re the first light."
@@ -1029,7 +1034,7 @@ export default function WorldMap({
 
       {/* Everyone present is busy. Say so, rather than showing a wall of dots
           that look tappable and are not. */}
-      {ready && hasPeers && !hasAvailable && !target && (
+      {ready && hasPeers && !hasAvailable && !target && !notesHidden && (
         <MapNote
           title="Everyone here is talking"
           body="Hold on — a light will free up in a moment."
