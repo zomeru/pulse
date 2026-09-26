@@ -14,7 +14,9 @@
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "api-probe": "node --env-file-if-exists=.env scripts/api-probe.mjs",
+    "check": "node scripts/check.mjs"
   },
   "dependencies": {
     "@prisma/adapter-neon": "^7.10.0",

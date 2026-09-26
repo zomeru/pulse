@@ -70,6 +70,30 @@ one dot to connect, accept, chat, and start video.
    ```
    Open http://localhost:3000.
 
+### Commands
+
+| Command | What it does |
+|---------|--------------|
+| `pnpm dev` | Next.js dev server on http://localhost:3000 |
+| `pnpm build` / `pnpm start` | Production build / serve it |
+| `pnpm check` | **Everything below, in order.** Stops at the first failure. |
+| `pnpm lint` | [Oxlint](https://oxc.rs/docs/guide/usage/linter) (`.oxlintrc.json`) |
+| `pnpm lint:fix` | Oxlint's safe autofixes |
+| `pnpm format` | [Oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`.oxfmtrc.json`) |
+| `pnpm format:check` | Reports unformatted files, exits non-zero. For CI. |
+| `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm api-probe` | The Phase 3 API probe (`scripts/api-probe.mjs`) |
+
+`pnpm check` runs `lint` → `format:check` → `typecheck` → `api-probe`. The first
+three need nothing running. **The probe is an HTTP client, so it needs a running
+server** — start `pnpm dev` in another terminal first, and `check` will tell you
+if nothing is listening. Extra arguments go to the probe:
+
+```bash
+pnpm check -- --skip-abuse        # skip the rate-limit sections
+pnpm check -- https://your-deployment.vercel.app
+```
+
 ### Testing with two users
 
 WebRTC needs two participants. Open the app in two browser profiles (e.g. a normal

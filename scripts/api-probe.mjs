@@ -1,7 +1,9 @@
 // Phase 3 API probe. Drives the coordination API over HTTP exactly like a
 // malicious client would, and prints a pass/fail line per check.
 //
-//   node scripts/api-probe.mjs [baseUrl]
+//   pnpm api-probe
+//   pnpm api-probe http://localhost:3000
+//   pnpm api-probe -- --skip-abuse
 
 import { randomBytes } from "node:crypto";
 
