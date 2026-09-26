@@ -1,0 +1,108 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // This replaces eslint-config-next (core-web-vitals + typescript) plus
+  // typescript-eslint recommended. Listing `plugins` replaces oxlint's default
+  // set outright, so the base plugins (eslint, typescript, oxc, unicorn) are
+  // named here too.
+  "plugins": [
+    "eslint",
+    "typescript",
+    "oxc",
+    "unicorn",
+    "react",
+    "jsx-a11y",
+    "nextjs"
+  ],
+
+  // oxlint's `correctness` category is the closest single switch to
+  // typescript-eslint recommended, and it is a superset: it already covers
+  // no-unused-vars, no-unused-expressions and the equivalent of no-explicit-any.
+  "categories": {
+    "correctness": "error"
+  },
+
+  // eslint-config-next exposed both the browser and the node globals, because
+  // this tree is client components, route handlers and build config at once.
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true
+  },
+
+  "settings": {
+    "react": {
+      "version": "19.2"
+    },
+    "next": {
+      "rootDir": "."
+    }
+  },
+
+  "ignorePatterns": [
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    // `prisma generate` writes the client into the repo; it is not our code.
+    "generated/**"
+  ],
+
+  "options": {
+    // A suppression that stops suppressing anything is a comment that will
+    // outlive the code it was written for, so treat it as a finding.
+    "reportUnusedDisableDirectives": "warn"
+  },
+
+  "rules": {
+    // eslint-plugin-react-hooks recommended, which eslint-config-next pulled in.
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    // The JSX transform and the Next.js <Image> component make these two
+    // inapplicable here. eslint-config-next turned them off for the same reason.
+    // (oxlint's react plugin has no prop-types rule at all, so there is nothing
+    // to carry over for that one.)
+    "react/react-in-jsx-scope": "off",
+    "react/no-unknown-property": "off",
+
+    // The @next/eslint-plugin-next rules eslint-config-next core-web-vitals
+    // switched on.
+    "nextjs/no-img-element": "warn",
+    "nextjs/no-html-link-for-pages": "warn",
+    "nextjs/no-sync-scripts": "error",
+    "nextjs/no-document-import-in-page": "error",
+    "nextjs/no-assign-module-variable": "error",
+    "nextjs/no-duplicate-head": "error",
+    "nextjs/no-head-import-in-document": "error",
+    "nextjs/no-head-element": "warn",
+    "nextjs/no-css-tags": "warn",
+    "nextjs/no-title-in-document-head": "warn",
+    "nextjs/no-styled-jsx-in-document": "warn",
+    "nextjs/no-async-client-component": "warn",
+    "nextjs/no-before-interactive-script-outside-document": "warn",
+    "nextjs/no-page-custom-font": "warn",
+    "nextjs/google-font-display": "warn",
+    "nextjs/google-font-preconnect": "warn",
+    "nextjs/next-script-for-ga": "warn",
+    "nextjs/no-unwanted-polyfillio": "warn",
+    "nextjs/no-typos": "warn",
+
+    // The six jsx-a11y rules eslint-config-next enabled, at the same severity.
+    "jsx-a11y/alt-text": "warn",
+    "jsx-a11y/aria-props": "warn",
+    "jsx-a11y/aria-proptypes": "warn",
+    "jsx-a11y/aria-unsupported-elements": "warn",
+    "jsx-a11y/role-has-required-aria-props": "warn",
+    "jsx-a11y/role-supports-aria-props": "warn",
+    // Enabling oxlint's jsx-a11y plugin also switches on its own recommended set,
+    // which is wider than the six rules above. These two are switched back off so
+    // the migration does not quietly open a new front of work in the UI:
+    //  - prefer-tag-over-role wants <output>/<section>/<dialog> in place of the
+    //    role="status"/"region"/"dialog" wrappers the design uses, which are
+    //    block-level by choice and would reflow if swapped.
+    //  - media-has-caption wants a <track> on <video>, but Pulse's video is a
+    //    peer-to-peer WebRTC stream with no caption track to attach.
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "jsx-a11y/media-has-caption": "off"
+  }
+}

@@ -10,7 +10,8 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -28,8 +29,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.7",
+    "oxlint": "^1.85.0",
     "prisma": "^7.8.0",
     "tailwindcss": "^4",
     "typescript": "^5"

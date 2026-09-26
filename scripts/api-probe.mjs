@@ -74,7 +74,7 @@ async function api(path, options = {}) {
     headers: {
       "x-forwarded-for": RUN_IP,
       ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers ?? {}),
+      ...options.headers,
     },
   });
   let body = null;

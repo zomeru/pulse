@@ -579,7 +579,7 @@ export default function WorldMap({
       setReady(false);
     };
     // `me` is read only for the initial camera; we don't want to re-init.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react/exhaustive-deps
   }, []);
 
   // ---------------------------------------------------------- "you are here"
