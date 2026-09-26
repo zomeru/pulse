@@ -12,6 +12,8 @@
     "start": "next start",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -29,6 +31,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "oxfmt": "^0.70.0",
     "oxlint": "^1.85.0",
     "prisma": "^7.8.0",
     "tailwindcss": "^4",

@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+
+  // The repo has no committed formatter config, but the code is consistently
+  // wrapped at 80 columns, which is Prettier's default and oxfmt's one change
+  // from it. 100 would re-join lines that already fit under 80 and turn the
+  // first `pnpm format` into a repo-wide diff that reviews nothing.
+  "printWidth": 80,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": false,
+  "trailingComma": "all",
+
+  // Reordering package.json keys makes every dependency bump a bigger diff than
+  // it needs to be, and moves packageManager away from the top of the file.
+  "sortPackageJson": false,
+
+  "ignorePatterns": [
+    ".next/**",
+    "out/**",
+    "build/**",
+    // `prisma generate` writes the client into the repo; it is not our code.
+    "generated/**",
+    // Documentation is prose, not source, and oxfmt reaches markdown through a
+    // bundled Prettier whose reflow is pure churn — it would also rewrite
+    // docs/requirements.md (which ships with CRLF line endings) in full.
+    "**/*.md",
+    "**/*.markdown",
+    // Local agent-tooling state, untracked and not part of the project.
+    ".serena/**"
+  ]
+}
