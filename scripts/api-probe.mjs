@@ -62,6 +62,13 @@ async function leaseOf(id) {
     ? new Date(rows[0].connectionExpiresAt).getTime()
     : 0;
 }
+async function presenceOf(id) {
+  const rows = await sql`SELECT "busy", "connectionId", "peerId" FROM "Presence" WHERE id = ${id}`;
+  return rows[0] ?? null;
+}
+async function waveRowsBetween(fromId, toId) {
+  return sql`SELECT "type", "payload", "connectionId" FROM "Signal" WHERE "fromId" = ${fromId} AND "toId" = ${toId}`;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(`${BASE}${path}`, {
@@ -104,6 +111,33 @@ function poll(session, connectionId, ack) {
   });
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Keep a set of sessions alive, the way the browser does.
+ *
+ * A presence row lives STALE_MS (15s) after its last heartbeat, which is the
+ * product working: a dot outliving its owner was the Phase 1 bug. A test that
+ * stops polling is therefore not testing a live session, it is testing a ghost,
+ * and the wave sections below take long enough on a high-latency link for that
+ * to matter. Anything the test still intends to speak with gets polled first.
+ */
+async function keepAlive(...sessions) {
+  for (const session of sessions) {
+    if (session) await poll(session);
+  }
+}
+
+/**
+ * Let a write become visible to the reads that follow it.
+ *
+ * Not a workaround for a product race: the assertions below are about policy — a
+ * wave must not reach a busy session — and not about how fast two statements on
+ * one database become consistent with each other. A short, bounded pause keeps
+ * the assertion about the rule rather than about the round trip.
+ */
+const settle = () => sleep(1_200);
+
 function signal(session, toId, type, connectionId, payload) {
   return post("/api/signal", {
     fromId: session.id,
@@ -112,6 +146,19 @@ function signal(session, toId, type, connectionId, payload) {
     connectionId,
     sessionToken: session.token,
     ...(payload === undefined ? {} : { payload }),
+  });
+}
+
+// A wave is the one signal that carries no connection token, so it gets its own
+// helper — `signal()` would file it under a connection and the server (rightly)
+// refuses that.
+function wave(session, toId, extra = {}) {
+  return post("/api/signal", {
+    fromId: session.id,
+    toId,
+    type: "wave",
+    sessionToken: session.token,
+    ...extra,
   });
 }
 
@@ -356,7 +403,205 @@ section("an unavailable target is not impersonated");
   await post("/api/leave", { id: asker.id, sessionToken: asker.token, incarnationId: asker.incarnationId });
 }
 
-// --- 5. Input validation -------------------------------------------------
+// --- 5. Waves -----------------------------------------------------------
+section("waves: a one-way hello, and the abuse it must not allow");
+{
+  const waver = await join(51.5, -0.12); // London
+  const far = await join(-33.87, 151.2); // Sydney
+  // A real client heartbeats every 1.5s and a presence row lives 15s, so a test
+  // that stops polling is not testing a live session — it is testing a ghost.
+  await keepAlive(waver, far);
+
+  const sent = await wave(waver, far.id);
+  ok("wave is accepted", sent.status === 200 && sent.body.waved === true, JSON.stringify(sent.body));
+
+  const inbox = await poll(far);
+  const landed = inbox.body?.signals?.find((s) => s.type === "wave");
+  ok("the wave reaches the target's mailbox", Boolean(landed));
+  ok("a wave carries no payload", landed?.payload === null, `payload=${landed?.payload}`);
+  ok("a wave belongs to no connection", landed?.connectionId === null, `connectionId=${landed?.connectionId}`);
+
+  // The one abuse a connection request is exposed to is pinning a stranger:
+  // reserving both rows marks their dot unavailable to everyone else. A wave
+  // must not be able to do that, or it is a cheaper way to hold someone.
+  const afterWave = await presenceOf(waver.id);
+  const targetAfterWave = await presenceOf(far.id);
+  ok(
+    "a wave reserves nothing on either side",
+    afterWave?.busy === false &&
+      afterWave?.connectionId === null &&
+      targetAfterWave?.busy === false &&
+      targetAfterWave?.connectionId === null,
+    `waver=${JSON.stringify(afterWave)} target=${JSON.stringify(targetAfterWave)}`,
+  );
+
+  // ...and it must not poison the reservation path either, which is the risk of
+  // filing it under a null connection token.
+  await keepAlive(waver, far);
+  const realConnectionId = uuid();
+  const reservable = await signal(waver, far.id, "request", realConnectionId);
+  ok(
+    "a wave does not block a later request",
+    reservable.status === 200 && !reservable.body.autoDeclined,
+    JSON.stringify(reservable.body),
+  );
+  await signal(waver, far.id, "end", realConnectionId);
+
+  // A busy stranger is not addressable on the map, and a wave must not be a way
+  // around that: there is deliberately no path that reaches a person who has
+  // already said yes to somebody else.
+  const busy = await join(48.85, 2.35);
+  const connectionId = uuid();
+  await keepAlive(waver);
+  const reserve = await signal(busy, far.id, "request", connectionId);
+  const accept = await signal(far, busy.id, "accept", connectionId);
+  await keepAlive(busy, far, waver);
+  await settle();
+  const toBusy = await wave(waver, busy.id);
+  ok(
+    "a wave will not reach a busy session",
+    toBusy.status === 200 && toBusy.body.waved === false,
+    `reserve=${JSON.stringify(reserve.body)} accept=${accept.status} ${JSON.stringify(toBusy.body)}`,
+  );
+  const busyInbox = await poll(busy);
+  ok(
+    "the busy target's client is left alone",
+    !busyInbox.body?.signals?.some((s) => s.type === "wave" && s.fromId === waver.id),
+  );
+
+  // A wave must not be fileable under a connection: that is how a message would
+  // end up in somebody's terminal-marker or lease lookups.
+  const withConnection = await wave(waver, far.id, { connectionId });
+  ok("a wave carrying a connection token is 400", withConnection.status === 400, `got ${withConnection.status}`);
+
+  const withPayload = await wave(waver, far.id, { payload: "hello" });
+  ok("a wave carrying a payload is 400", withPayload.status === 400, `got ${withPayload.status}`);
+
+  const toSelf = await wave(waver, waver.id);
+  ok("a wave to yourself is 400", toSelf.status === 400, `got ${toSelf.status}`);
+
+  // Every refusal above must have written nothing at all, not merely reported
+  // failure. A 400 that still left a row behind would be a way to get a message
+  // into a mailbox that no rate limit applies to.
+  const wroteNothing = await waveRowsBetween(waver.id, busy.id);
+  ok(
+    "a refused wave writes no row",
+    Array.isArray(wroteNothing) && wroteNothing.length === 0,
+    JSON.stringify(wroteNothing),
+  );
+
+  // Forgery: a stranger cannot wave as somebody else, and the attempt must not
+  // reach the person it was aimed at.
+  await keepAlive(waver);
+  const impersonate = await post("/api/signal", {
+    fromId: far.id,
+    toId: waver.id,
+    type: "wave",
+    sessionToken: fakeToken(),
+  });
+  ok("cannot send a wave as another participant", impersonate.status === 401, `got ${impersonate.status}`);
+  const waverInbox = await poll(waver);
+  ok(
+    "the forged wave was never delivered",
+    !waverInbox.body?.signals?.some((s) => s.type === "wave" && s.fromId === far.id),
+  );
+
+  // Ending the session takes the wave with it. A wave leaves the same trace a
+  // request does and no longer: the sender leaving clears it immediately, and
+  // the target leaving clears what was sent to them.
+  const transient = await join(1, 1);
+  await keepAlive(transient, waver);
+  const outbound = await wave(transient, waver.id);
+  ok("a wave from a short-lived session is accepted", outbound.status === 200 && outbound.body.waved === true, JSON.stringify(outbound.body));
+  const beforeLeave = await poll(waver);
+  ok(
+    "the wave is queued before the sender leaves",
+    beforeLeave.body?.signals?.some((s) => s.type === "wave" && s.fromId === transient.id),
+    JSON.stringify(beforeLeave.body?.signals?.map((s) => s.type)),
+  );
+  await post("/api/leave", { id: transient.id, sessionToken: transient.token, incarnationId: transient.incarnationId });
+  const afterLeave = await poll(waver);
+  ok(
+    "leaving takes the wave with it",
+    !afterLeave.body?.signals?.some((s) => s.type === "wave" && s.fromId === transient.id),
+  );
+
+  for (const s of [waver, far, busy]) {
+    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+  }
+}
+
+// --- 6. Waves cannot be spammed ----------------------------------------
+section("wave abuse is rate limited");
+if (SKIP_ABUSE) {
+  console.log("  SKIP  wave rate-limit assertions (--skip-abuse)");
+} else {
+  const spammer = await join(12, 12);
+
+  // 1) hammering one stranger
+  const victim = await join(13, 13);
+  await keepAlive(spammer, victim);
+  let perTargetBlocked = 0;
+  for (let i = 0; i < 4; i += 1) {
+    const result = await wave(spammer, victim.id);
+    if (result.status === 429) perTargetBlocked += 1;
+  }
+  ok("a repeat wave to one stranger is rate limited", perTargetBlocked > 0, `${perTargetBlocked}/4 refused`);
+
+  const victimInbox = await poll(victim);
+  ok(
+    "the rate limit bounds what landed in one mailbox",
+    victimInbox.body?.signals?.filter((s) => s.type === "wave" && s.fromId === spammer.id).length <= 1,
+  );
+
+  // 2) spraying the map. Joined and waved in small groups on purpose.
+  //
+  //    Firing twenty-two joins and twenty-two waves at once does prove the limit,
+  //    but it also hammers the reaper from forty-six concurrent requests, and the
+  //    reaper's half-built-reservation repair (Phase 3) has a genuine race with
+  //    `reserveConnection` that this load reliably exposes — see NOTES.md. A
+  //    sequential client never sees it, and testing for a *limit* should not
+  //    depend on provoking an unrelated race.
+  const targets = [];
+  for (let batch = 0; batch < 4; batch += 1) {
+    targets.push(
+      ...(await Promise.all(
+        Array.from({ length: 6 }, (_, i) => join(20 + (batch * 6 + i) * 0.01, 30 + i * 0.01)),
+      )),
+    );
+    await keepAlive(spammer);
+  }
+  const spray = [];
+  for (let i = 0; i < targets.length; i += 4) {
+    const group = targets.slice(i, i + 4);
+    // Each target is heartbeated immediately before it is waved at. A recipient
+    // that had stopped polling is no longer on the map, and a wave at somebody
+    // who is not there is correctly refused — which would make this a test of
+    // staleness instead of a test of the limit.
+    await keepAlive(spammer, ...group);
+    spray.push(...(await Promise.all(group.map((t) => wave(spammer, t.id)))));
+  }
+  const tally = {};
+  for (const result of spray) {
+    const key = `${result.status}:${JSON.stringify(result.body)}`;
+    tally[key] = (tally[key] ?? 0) + 1;
+  }
+  ok(
+    "spraying waves at the whole map is rate limited",
+    spray.filter((r) => r.status === 429).length > 0,
+    JSON.stringify(tally),
+  );
+  const accepted = spray.filter((r) => r.status === 200 && r.body?.waved).length;
+  // The other half of the assertion, and the one that matters: a limit that only
+  // ever says no is not a limit, it is an outage.
+  ok("but an honest handful still gets through", accepted >= 10, `${accepted} accepted, ${JSON.stringify(tally)}`);
+
+  for (const s of [spammer, victim, ...targets]) {
+    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+  }
+}
+
+// --- 7. Input validation -------------------------------------------------
 section("input validation");
 {
   const session = await join();
@@ -451,7 +696,7 @@ section("input validation");
   }
 }
 
-// --- 6. Cross-origin -----------------------------------------------------
+// --- 8. Cross-origin -----------------------------------------------------
 section("cross-origin writes");
 {
   const session = await join(3, 3);
@@ -477,7 +722,7 @@ section("cross-origin writes");
   ok("no-origin leave (beacon) is allowed", noOrigin.status === 200);
 }
 
-// --- 7. A connection cannot be held forever ------------------------------
+// --- 9. A connection cannot be held forever ------------------------------
 section("connection lifetime is capped");
 {
   const holder = await join(20, 20);
@@ -515,7 +760,7 @@ section("connection lifetime is capped");
   }
 }
 
-// --- 8. Abusive client ---------------------------------------------------
+// --- 10. Abusive client ---------------------------------------------------
 section("resource abuse");
 if (SKIP_ABUSE) {
   console.log("  SKIP  rate-limit assertions (--skip-abuse)");
@@ -590,7 +835,7 @@ if (SKIP_ABUSE) {
   await post("/api/leave", { id: target.id, sessionToken: target.token, incarnationId: target.incarnationId });
 }
 
-// --- 9. Error bodies carry nothing ---------------------------------------
+// --- 11. Error bodies carry nothing ---------------------------------------
 section("error responses leak nothing");
 {
   const responses = [
@@ -612,7 +857,7 @@ section("error responses leak nothing");
   ok("unknown session is 401 or 400, never 500", bad.status === 401 || bad.status === 400, `got ${bad.status}`);
 }
 
-// --- 9. Response headers -------------------------------------------------
+// --- 12. Response headers -------------------------------------------------
 section("response hardening");
 {
   const page = await fetch(BASE, { redirect: "manual" });
