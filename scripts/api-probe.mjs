@@ -46,9 +46,7 @@ const uuid = () => crypto.randomUUID();
 // thing under test is a *time* limit that no HTTP client can reach.
 const DB = process.env.DATABASE_URL_UNPOOLED;
 async function sql(fragments, ...values) {
-  const { neon } = await import(
-    "/Users/zomeru/Desktop/Pulse-Technical-Assessment/node_modules/@neondatabase/serverless/index.mjs"
-  );
+  const { neon } = await import("@neondatabase/serverless");
   const client = neon(DB);
   return client(fragments, ...values);
 }

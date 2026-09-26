@@ -1,0 +1,32 @@
+# pnpm reads its configuration from here (and from the CLI), not from the
+# `pnpm` field in package.json — that field was removed in pnpm 12.
+#
+# This repository is a single package, so there is no `packages:` list on
+# purpose: with no list, only the root package is part of the workspace.
+#
+# pnpm does not run dependency lifecycle scripts unless they are allow-listed
+# (pnpm 11+ fails the install outright otherwise), so the four packages that
+# need a build step are named here. That keeps `pnpm install` reproducible for
+# anyone cloning the repo and in CI, instead of depending on an interactive
+# `pnpm approve-builds`.
+allowBuilds:
+  "@prisma/engines": true
+  prisma: true
+  # Next.js's image optimiser. Not used by Pulse today, but it ships with
+  # next and its install-time binary setup is harmless.
+  sharp: true
+  # napi prebuilt binaries for the resolver that backs the import plugins.
+  unrs-resolver: true
+
+# `prisma generate` writes the client into ./generated (see .gitignore), i.e.
+# *our* source tree, and that generated code requires Prisma's internal
+# `@prisma/client-runtime-utils` by bare specifier. pnpm's isolated layout only
+# links a package's own declared dependencies into its node_modules, so that
+# bare import cannot resolve from ./generated and `next build` fails with
+# "Module not found: @prisma/client-runtime-utils".
+#
+# Hoisting just that one package into the root node_modules is the fix Prisma
+# needs; it is narrower than switching the whole repo to `nodeLinker: hoisted`,
+# which would give up pnpm's strict node_modules for everything else.
+publicHoistPattern:
+  - "@prisma/client-runtime-utils"

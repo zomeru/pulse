@@ -52,20 +52,21 @@ one dot to connect, accept, chat, and start video.
 
 ### Local setup
 
-1. Install deps:
+1. Install deps (this repo uses [pnpm](https://pnpm.io); `corepack enable` will
+   fetch the version pinned in `packageManager`):
    ```bash
-   npm install
+   pnpm install
    ```
 2. Copy `.env.example` to `.env` and fill in your own credentials:
    - A free Postgres database — [Neon](https://neon.tech) or Vercel Postgres.
    - A free [Mapbox token](https://account.mapbox.com/access-tokens/).
 3. Create the tables:
    ```bash
-   npx prisma db push
+   pnpm prisma db push
    ```
 4. Run it:
    ```bash
-   npm run dev
+   pnpm dev
    ```
    Open http://localhost:3000.
 
