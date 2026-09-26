@@ -212,7 +212,10 @@ export default function ChatPanel({
         {/* Awaiting video acceptance — a cancellable wait, not a dead end. */}
         {videoRequested && (
           <div className="pulse-enter-fast mx-3 mt-3 flex items-center gap-2.5 rounded-2xl border border-signal/20 bg-signal/[0.07] px-3 py-2.5">
-            <span className="pulse-typing flex items-center gap-1" aria-hidden="true">
+            <span
+              className="pulse-typing flex items-center gap-1"
+              aria-hidden="true"
+            >
               <span />
               <span />
               <span />
@@ -274,7 +277,8 @@ export default function ChatPanel({
                         >
                           {message.text}
                         </div>
-                        {(grouped === false || index === messages.length - 1) && (
+                        {(grouped === false ||
+                          index === messages.length - 1) && (
                           <time
                             className={cn(
                               "mt-1 block font-mono text-[0.5625rem] tracking-wider text-ink-faint/80",

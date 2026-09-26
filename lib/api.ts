@@ -44,7 +44,10 @@ async function assertOk(response: Response, operation: string): Promise<void> {
   } catch {
     // A non-JSON error body is not worth reporting.
   }
-  throw new ApiError(response.status, code === "request_failed" ? operation : code);
+  throw new ApiError(
+    response.status,
+    code === "request_failed" ? operation : code,
+  );
 }
 
 export interface JoinResult {
@@ -145,7 +148,12 @@ export function leave(
   incarnationId: string,
   connectionId?: string,
 ): void {
-  const body = JSON.stringify({ id, sessionToken, incarnationId, connectionId });
+  const body = JSON.stringify({
+    id,
+    sessionToken,
+    incarnationId,
+    connectionId,
+  });
   if (typeof navigator !== "undefined" && navigator.sendBeacon) {
     try {
       if (navigator.sendBeacon("/api/leave", body)) return;

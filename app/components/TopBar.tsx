@@ -65,7 +65,9 @@ export default function TopBar({
 }) {
   const current = stageIndex(stage);
   const copy =
-    current === 1 && incoming ? { ...STAGES[current], ...INCOMING } : STAGES[current];
+    current === 1 && incoming
+      ? { ...STAGES[current], ...INCOMING }
+      : STAGES[current];
 
   return (
     <header
@@ -143,7 +145,10 @@ export default function TopBar({
       </div>
 
       {/* Progress hairline: the flow, in four quiet segments. */}
-      <div className="mx-auto mt-1.5 flex max-w-[70rem] gap-1" aria-hidden="true">
+      <div
+        className="mx-auto mt-1.5 flex max-w-[70rem] gap-1"
+        aria-hidden="true"
+      >
         {STAGES.map((entry, index) => (
           <span
             key={entry.key}

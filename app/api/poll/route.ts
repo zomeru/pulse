@@ -18,11 +18,7 @@ import {
   isSessionId,
   parseAckList,
 } from "@/lib/validate";
-import {
-  clientSubject,
-  enforceRateLimit,
-  POLL_LIMITS,
-} from "@/lib/rate-limit";
+import { clientSubject, enforceRateLimit, POLL_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

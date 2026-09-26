@@ -127,8 +127,8 @@ export default function EntryGate({
             No account. No history. Nothing kept.
           </li>
           <li className="pulse-hint">
-            Your light sits 1&ndash;3&nbsp;km from where you are, never on top of
-            it.
+            Your light sits 1&ndash;3&nbsp;km from where you are, never on top
+            of it.
           </li>
           <li className="pulse-hint">Closing the tab takes you off the map.</li>
         </ul>
@@ -171,13 +171,31 @@ function GlobeMark() {
 
         {/* strangers */}
         <circle cx="58" cy="46" r="13" fill="rgba(95,240,200,0.10)" />
-        <circle cx="58" cy="46" r="2.75" fill="#5ff0c8" className="pulse-glint" />
+        <circle
+          cx="58"
+          cy="46"
+          r="2.75"
+          fill="#5ff0c8"
+          className="pulse-glint"
+        />
 
         <circle cx="184" cy="84" r="13" fill="rgba(195,164,255,0.10)" />
-        <circle cx="184" cy="84" r="2.75" fill="#c3a4ff" className="pulse-glint-alt" />
+        <circle
+          cx="184"
+          cy="84"
+          r="2.75"
+          fill="#c3a4ff"
+          className="pulse-glint-alt"
+        />
 
         <circle cx="150" cy="30" r="11" fill="rgba(255,158,199,0.10)" />
-        <circle cx="150" cy="30" r="2.25" fill="#ff9ec7" className="pulse-glint-slow" />
+        <circle
+          cx="150"
+          cy="30"
+          r="2.25"
+          fill="#ff9ec7"
+          className="pulse-glint-slow"
+        />
       </g>
     </svg>
   );

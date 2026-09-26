@@ -15,11 +15,7 @@ import {
   isIncarnationId,
   isSessionId,
 } from "@/lib/validate";
-import {
-  clientSubject,
-  enforceRateLimit,
-  JOIN_LIMITS,
-} from "@/lib/rate-limit";
+import { clientSubject, enforceRateLimit, JOIN_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

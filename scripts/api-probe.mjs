@@ -6,7 +6,8 @@
 import { randomBytes } from "node:crypto";
 
 const args = process.argv.slice(2);
-const BASE = args.find((arg) => !arg.startsWith("--")) ?? "http://localhost:3000";
+const BASE =
+  args.find((arg) => !arg.startsWith("--")) ?? "http://localhost:3000";
 // The abuse section needs the rate limiter; `--skip-abuse` runs the rest.
 const SKIP_ABUSE = args.includes("--skip-abuse");
 
@@ -55,13 +56,15 @@ const ageConnection = (connectionId) =>
 const expireLease = (connectionId) =>
   sql`UPDATE "Presence" SET "connectionExpiresAt" = now() - interval '1 second' WHERE "connectionId" = ${connectionId}`;
 async function leaseOf(id) {
-  const rows = await sql`SELECT "connectionExpiresAt" FROM "Presence" WHERE id = ${id}`;
+  const rows =
+    await sql`SELECT "connectionExpiresAt" FROM "Presence" WHERE id = ${id}`;
   return rows[0]?.connectionExpiresAt
     ? new Date(rows[0].connectionExpiresAt).getTime()
     : 0;
 }
 async function presenceOf(id) {
-  const rows = await sql`SELECT "busy", "connectionId", "peerId" FROM "Presence" WHERE id = ${id}`;
+  const rows =
+    await sql`SELECT "busy", "connectionId", "peerId" FROM "Presence" WHERE id = ${id}`;
   return rows[0] ?? null;
 }
 async function waveRowsBetween(fromId, toId) {
@@ -95,7 +98,9 @@ async function join(lat = 51.5, lng = -0.12) {
   const incarnationId = uuid();
   const result = await post("/api/join", { id, lat, lng, incarnationId });
   if (result.status !== 200) {
-    throw new Error(`join failed: ${result.status} ${JSON.stringify(result.body)}`);
+    throw new Error(
+      `join failed: ${result.status} ${JSON.stringify(result.body)}`,
+    );
   }
   return { id, incarnationId, token: result.body.sessionToken };
 }
@@ -128,9 +133,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * already stale.
  */
 function keepAlive(...sessions) {
-  return Promise.all(
-    sessions.filter(Boolean).map((session) => poll(session)),
-  );
+  return Promise.all(sessions.filter(Boolean).map((session) => poll(session)));
 }
 
 const beating = new Set();
@@ -185,7 +188,12 @@ async function reservePair(requester, target) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const connectionId = uuid();
     await keepAlive(requester, target);
-    const reserved = await signal(requester, target.id, "request", connectionId);
+    const reserved = await signal(
+      requester,
+      target.id,
+      "request",
+      connectionId,
+    );
     if (reserved.status === 200 && !reserved.body.autoDeclined) {
       // From here on the lease is renewed the way a browser renews it.
       const stop = startBeating([requester, target], connectionId);
@@ -236,7 +244,10 @@ section("happy path: two anonymous users can still meet");
   const alice = await join();
   const bob = await join(48.85, 2.35);
   const stop = startBeating([alice, bob]);
-  ok("join issues a session token", typeof alice.token === "string" && alice.token.length === 43);
+  ok(
+    "join issues a session token",
+    typeof alice.token === "string" && alice.token.length === 43,
+  );
 
   const polled = await poll(alice);
   ok("poll with the token succeeds", polled.status === 200);
@@ -246,22 +257,28 @@ section("happy path: two anonymous users can still meet");
       polled.body.peers.some((p) => p.id === bob.id),
     JSON.stringify(polled.body?.peers),
   );
-  ok("poll response is not cacheable", polled.headers.get("cache-control")?.includes("no-store"));
+  ok(
+    "poll response is not cacheable",
+    polled.headers.get("cache-control")?.includes("no-store"),
+  );
   ok("no x-powered-by on the API", !polled.headers.get("x-powered-by"));
 
   // `reservePair` rather than a bare request: it heartbeats first, and it
   // retries once for the known pre-existing reaper race. Neither is about the
   // thing this section is here to prove — that two anonymous users can meet.
-  const { connectionId, reserved: requested, stop: stopPair } = await reservePair(
-    alice,
-    bob,
-  );
+  const {
+    connectionId,
+    reserved: requested,
+    stop: stopPair,
+  } = await reservePair(alice, bob);
   ok("request reserves the connection", Boolean(connectionId));
 
   const inbox = await poll(bob);
   ok(
     "target receives the request",
-    inbox.body?.signals?.some((s) => s.type === "request" && s.connectionId === connectionId),
+    inbox.body?.signals?.some(
+      (s) => s.type === "request" && s.connectionId === connectionId,
+    ),
     JSON.stringify(requested?.body),
   );
 
@@ -275,7 +292,10 @@ section("happy path: two anonymous users can still meet");
     bob.id,
     "offer",
     connectionId,
-    JSON.stringify({ type: "offer", sdp: "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n" }),
+    JSON.stringify({
+      type: "offer",
+      sdp: "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n",
+    }),
   );
   ok("offer relays into the target mailbox", offer.status === 200);
 
@@ -294,7 +314,9 @@ section("happy path: two anonymous users can still meet");
   const afterEnd = await poll(alice);
   ok(
     "terminal message reaches both sides",
-    afterEnd.body?.signals?.some((s) => s.type === "end" && s.connectionId === connectionId),
+    afterEnd.body?.signals?.some(
+      (s) => s.type === "end" && s.connectionId === connectionId,
+    ),
   );
 
   const left = await post("/api/leave", {
@@ -324,7 +346,11 @@ section("IDOR: knowing a session id is not permission");
   const stolenPoll = await api(`/api/poll?id=${victim.id}`, {
     headers: { "x-pulse-session": attacker.token },
   });
-  ok("poll refuses a foreign token", stolenPoll.status === 401, `got ${stolenPoll.status}`);
+  ok(
+    "poll refuses a foreign token",
+    stolenPoll.status === 401,
+    `got ${stolenPoll.status}`,
+  );
 
   const noToken = await api(`/api/poll?id=${victim.id}`);
   ok("poll refuses a missing token", noToken.status === 401);
@@ -342,7 +368,11 @@ section("IDOR: knowing a session id is not permission");
     lng: 0,
     incarnationId: uuid(),
   });
-  ok("join refuses to take over a live session", hijackJoin.status === 409, `got ${hijackJoin.status}`);
+  ok(
+    "join refuses to take over a live session",
+    hijackJoin.status === 409,
+    `got ${hijackJoin.status}`,
+  );
 
   const wrongToken = await post("/api/join", {
     id: victim.id,
@@ -351,7 +381,11 @@ section("IDOR: knowing a session id is not permission");
     incarnationId: uuid(),
     sessionToken: attacker.token,
   });
-  ok("join refuses a foreign token", wrongToken.status === 409, `got ${wrongToken.status}`);
+  ok(
+    "join refuses a foreign token",
+    wrongToken.status === 409,
+    `got ${wrongToken.status}`,
+  );
 
   // the victim is untouched
   await keepAlive(victim);
@@ -363,7 +397,11 @@ section("IDOR: knowing a session id is not permission");
 
   // delete / end the victim
   const bareLeave = await post("/api/leave", { id: victim.id });
-  ok("bare leave is rejected", bareLeave.status === 401, `got ${bareLeave.status}`);
+  ok(
+    "bare leave is rejected",
+    bareLeave.status === 401,
+    `got ${bareLeave.status}`,
+  );
 
   const tokenLeave = await post("/api/leave", {
     id: victim.id,
@@ -398,17 +436,34 @@ section("signaling: no injection into somebody else's session");
   const stop = startBeating([victim, attacker, stranger]);
   const stolenConnectionId = uuid();
 
-  const foreignOffer = await signal(attacker, victim.id, "offer", stolenConnectionId, "x");
-  ok("offer with an unknown connection is refused", foreignOffer.status === 409, `got ${foreignOffer.status}`);
+  const foreignOffer = await signal(
+    attacker,
+    victim.id,
+    "offer",
+    stolenConnectionId,
+    "x",
+  );
+  ok(
+    "offer with an unknown connection is refused",
+    foreignOffer.status === 409,
+    `got ${foreignOffer.status}`,
+  );
 
   // Naming a connection that does not exist must leave the victim alone. There
   // is nothing to refuse, so this is a no-op rather than an error.
-  const unknownEnd = await signal(attacker, victim.id, "end", stolenConnectionId);
+  const unknownEnd = await signal(
+    attacker,
+    victim.id,
+    "end",
+    stolenConnectionId,
+  );
   ok("end with an unknown connection is a no-op", unknownEnd.status === 200);
   const victimUnharmed = await poll(victim);
   ok(
     "victim receives no message from that attempt",
-    !victimUnharmed.body?.signals?.some((s) => s.connectionId === stolenConnectionId),
+    !victimUnharmed.body?.signals?.some(
+      (s) => s.connectionId === stolenConnectionId,
+    ),
   );
 
   // A well-formed token that owns nothing, tried against a real id.
@@ -419,7 +474,11 @@ section("signaling: no injection into somebody else's session");
     connectionId: uuid(),
     sessionToken: fakeToken(),
   });
-  ok("cannot speak for another participant", impersonate.status === 401, `got ${impersonate.status}`);
+  ok(
+    "cannot speak for another participant",
+    impersonate.status === 401,
+    `got ${impersonate.status}`,
+  );
 
   // A real connection between victim and stranger, then attacker tries to use it.
   // The pair's lease is renewed from here on, through the poll, exactly as a
@@ -429,16 +488,33 @@ section("signaling: no injection into somebody else's session");
   // Asserted, because every assertion below this line is about a *live*
   // connection and would otherwise report a validation error instead of the
   // thing that actually went wrong: `reservePair` never got one.
-  ok("the live connection for this section was reserved", Boolean(connectionId));
+  ok(
+    "the live connection for this section was reserved",
+    Boolean(connectionId),
+  );
   await keepAlive(victim, stranger);
   await signal(stranger, victim.id, "accept", connectionId);
   await keepAlive(victim, stranger, attacker);
 
-  const injectedOffer = await signal(attacker, victim.id, "offer", connectionId, "attacker-sdp");
-  ok("non-participant cannot inject an offer", injectedOffer.status === 409, `got ${injectedOffer.status}`);
+  const injectedOffer = await signal(
+    attacker,
+    victim.id,
+    "offer",
+    connectionId,
+    "attacker-sdp",
+  );
+  ok(
+    "non-participant cannot inject an offer",
+    injectedOffer.status === 409,
+    `got ${injectedOffer.status}`,
+  );
 
   const injectedEnd = await signal(attacker, stranger.id, "end", connectionId);
-  ok("a non-participant's end is not treated as authoritative", injectedEnd.status === 200, `got ${injectedEnd.status}`);
+  ok(
+    "a non-participant's end is not treated as authoritative",
+    injectedEnd.status === 200,
+    `got ${injectedEnd.status}`,
+  );
 
   const victimInbox = await poll(victim);
   ok(
@@ -447,21 +523,38 @@ section("signaling: no injection into somebody else's session");
   );
   ok(
     "no end was written for the attacker's attempt",
-    !victimInbox.body?.signals?.some((s) => s.type === "end" && s.fromId === attacker.id),
+    !victimInbox.body?.signals?.some(
+      (s) => s.type === "end" && s.fromId === attacker.id,
+    ),
   );
 
   // The proof that the connection survived: only a participant can still get a
   // message into it.
-  const stillLive = await signal(victim, stranger.id, "offer", connectionId, "v-sdp");
-  ok("the connection is still live afterwards", stillLive.status === 200, `got ${stillLive.status}`);
+  const stillLive = await signal(
+    victim,
+    stranger.id,
+    "offer",
+    connectionId,
+    "v-sdp",
+  );
+  ok(
+    "the connection is still live afterwards",
+    stillLive.status === 200,
+    `got ${stillLive.status}`,
+  );
 
   // A participant CAN end it.
   const realEnd = await signal(victim, stranger.id, "end", connectionId);
-  ok("participant can end its own connection", realEnd.status === 200 && !realEnd.body.ignored);
+  ok(
+    "participant can end its own connection",
+    realEnd.status === 200 && !realEnd.body.ignored,
+  );
   const strangerSees = await poll(stranger);
   ok(
     "peer is told the connection ended",
-    strangerSees.body?.signals?.some((s) => s.type === "end" && s.connectionId === connectionId),
+    strangerSees.body?.signals?.some(
+      (s) => s.type === "end" && s.connectionId === connectionId,
+    ),
   );
 
   for (const s of [victim, attacker, stranger]) {
@@ -492,7 +585,11 @@ section("an unavailable target is not impersonated");
     "requester is not sent a decline forged from anyone",
     !askerInbox.body?.signals?.some((s) => s.type === "decline"),
   );
-  await post("/api/leave", { id: asker.id, sessionToken: asker.token, incarnationId: asker.incarnationId });
+  await post("/api/leave", {
+    id: asker.id,
+    sessionToken: asker.token,
+    incarnationId: asker.incarnationId,
+  });
 }
 
 // --- 5. Waves -----------------------------------------------------------
@@ -506,13 +603,25 @@ section("waves: a one-way hello, and the abuse it must not allow");
   await keepAlive(waver, far);
 
   const sent = await wave(waver, far.id);
-  ok("wave is accepted", sent.status === 200 && sent.body.waved === true, JSON.stringify(sent.body));
+  ok(
+    "wave is accepted",
+    sent.status === 200 && sent.body.waved === true,
+    JSON.stringify(sent.body),
+  );
 
   const inbox = await poll(far);
   const landed = inbox.body?.signals?.find((s) => s.type === "wave");
   ok("the wave reaches the target's mailbox", Boolean(landed));
-  ok("a wave carries no payload", landed?.payload === null, `payload=${landed?.payload}`);
-  ok("a wave belongs to no connection", landed?.connectionId === null, `connectionId=${landed?.connectionId}`);
+  ok(
+    "a wave carries no payload",
+    landed?.payload === null,
+    `payload=${landed?.payload}`,
+  );
+  ok(
+    "a wave belongs to no connection",
+    landed?.connectionId === null,
+    `connectionId=${landed?.connectionId}`,
+  );
 
   // The one abuse a connection request is exposed to is pinning a stranger:
   // reserving both rows marks their dot unavailable to everyone else. A wave
@@ -573,19 +682,35 @@ section("waves: a one-way hello, and the abuse it must not allow");
   const busyInbox = await poll(busy);
   ok(
     "the busy target's client is left alone",
-    !busyInbox.body?.signals?.some((s) => s.type === "wave" && s.fromId === waver.id),
+    !busyInbox.body?.signals?.some(
+      (s) => s.type === "wave" && s.fromId === waver.id,
+    ),
   );
 
   // A wave must not be fileable under a connection: that is how a message would
   // end up in somebody's terminal-marker or lease lookups.
-  const withConnection = await wave(waver, far.id, { connectionId: busyConnectionId });
-  ok("a wave carrying a connection token is 400", withConnection.status === 400, `got ${withConnection.status}`);
+  const withConnection = await wave(waver, far.id, {
+    connectionId: busyConnectionId,
+  });
+  ok(
+    "a wave carrying a connection token is 400",
+    withConnection.status === 400,
+    `got ${withConnection.status}`,
+  );
 
   const withPayload = await wave(waver, far.id, { payload: "hello" });
-  ok("a wave carrying a payload is 400", withPayload.status === 400, `got ${withPayload.status}`);
+  ok(
+    "a wave carrying a payload is 400",
+    withPayload.status === 400,
+    `got ${withPayload.status}`,
+  );
 
   const toSelf = await wave(waver, waver.id);
-  ok("a wave to yourself is 400", toSelf.status === 400, `got ${toSelf.status}`);
+  ok(
+    "a wave to yourself is 400",
+    toSelf.status === 400,
+    `got ${toSelf.status}`,
+  );
 
   // Every refusal above must have written nothing at all, not merely reported
   // failure. A 400 that still left a row behind would be a way to get a message
@@ -606,11 +731,17 @@ section("waves: a one-way hello, and the abuse it must not allow");
     type: "wave",
     sessionToken: fakeToken(),
   });
-  ok("cannot send a wave as another participant", impersonate.status === 401, `got ${impersonate.status}`);
+  ok(
+    "cannot send a wave as another participant",
+    impersonate.status === 401,
+    `got ${impersonate.status}`,
+  );
   const waverInbox = await poll(waver);
   ok(
     "the forged wave was never delivered",
-    !waverInbox.body?.signals?.some((s) => s.type === "wave" && s.fromId === far.id),
+    !waverInbox.body?.signals?.some(
+      (s) => s.type === "wave" && s.fromId === far.id,
+    ),
   );
 
   // Ending the session takes the wave with it. A wave leaves the same trace a
@@ -620,23 +751,39 @@ section("waves: a one-way hello, and the abuse it must not allow");
   const stopTransient = startBeating([transient]);
   await keepAlive(transient, waver);
   const outbound = await wave(transient, waver.id);
-  ok("a wave from a short-lived session is accepted", outbound.status === 200 && outbound.body.waved === true, JSON.stringify(outbound.body));
+  ok(
+    "a wave from a short-lived session is accepted",
+    outbound.status === 200 && outbound.body.waved === true,
+    JSON.stringify(outbound.body),
+  );
   const beforeLeave = await poll(waver);
   ok(
     "the wave is queued before the sender leaves",
-    beforeLeave.body?.signals?.some((s) => s.type === "wave" && s.fromId === transient.id),
+    beforeLeave.body?.signals?.some(
+      (s) => s.type === "wave" && s.fromId === transient.id,
+    ),
     JSON.stringify(beforeLeave.body?.signals?.map((s) => s.type)),
   );
-  await post("/api/leave", { id: transient.id, sessionToken: transient.token, incarnationId: transient.incarnationId });
+  await post("/api/leave", {
+    id: transient.id,
+    sessionToken: transient.token,
+    incarnationId: transient.incarnationId,
+  });
   stopTransient();
   const afterLeave = await poll(waver);
   ok(
     "leaving takes the wave with it",
-    !afterLeave.body?.signals?.some((s) => s.type === "wave" && s.fromId === transient.id),
+    !afterLeave.body?.signals?.some(
+      (s) => s.type === "wave" && s.fromId === transient.id,
+    ),
   );
 
   for (const s of [waver, far, busy]) {
-    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+    await post("/api/leave", {
+      id: s.id,
+      sessionToken: s.token,
+      incarnationId: s.incarnationId,
+    });
   }
   stopBusy();
   stopBusyPair();
@@ -660,12 +807,18 @@ if (SKIP_ABUSE) {
     const result = await wave(spammer, victim.id);
     if (result.status === 429) perTargetBlocked += 1;
   }
-  ok("a repeat wave to one stranger is rate limited", perTargetBlocked > 0, `${perTargetBlocked}/4 refused`);
+  ok(
+    "a repeat wave to one stranger is rate limited",
+    perTargetBlocked > 0,
+    `${perTargetBlocked}/4 refused`,
+  );
 
   const victimInbox = await poll(victim);
   ok(
     "the rate limit bounds what landed in one mailbox",
-    victimInbox.body?.signals?.filter((s) => s.type === "wave" && s.fromId === spammer.id).length <= 1,
+    victimInbox.body?.signals?.filter(
+      (s) => s.type === "wave" && s.fromId === spammer.id,
+    ).length <= 1,
   );
 
   // 2) spraying the map.
@@ -709,13 +862,23 @@ if (SKIP_ABUSE) {
     spray.filter((r) => r.status === 429).length > 0,
     JSON.stringify(tally),
   );
-  const accepted = spray.filter((r) => r.status === 200 && r.body?.waved).length;
+  const accepted = spray.filter(
+    (r) => r.status === 200 && r.body?.waved,
+  ).length;
   // The other half of the assertion, and the one that matters: a limit that only
   // ever says no is not a limit, it is an outage.
-  ok("but an honest handful still gets through", accepted >= 10, `${accepted} accepted, ${JSON.stringify(tally)}`);
+  ok(
+    "but an honest handful still gets through",
+    accepted >= 10,
+    `${accepted} accepted, ${JSON.stringify(tally)}`,
+  );
 
   for (const s of [spammer, victim, ...targets]) {
-    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+    await post("/api/leave", {
+      id: s.id,
+      sessionToken: s.token,
+      incarnationId: s.incarnationId,
+    });
   }
   stop();
 }
@@ -727,7 +890,11 @@ section("input validation");
   const stop = startBeating([session]);
 
   const badMethod = await api("/api/join", { method: "DELETE" });
-  ok("unimplemented method is 405", badMethod.status === 405, `got ${badMethod.status}`);
+  ok(
+    "unimplemented method is 405",
+    badMethod.status === 405,
+    `got ${badMethod.status}`,
+  );
 
   const badBody = await api("/api/join", {
     method: "POST",
@@ -755,7 +922,12 @@ section("input validation");
   });
   ok("non-numeric coordinates are 400", nanCoords.status === 400);
 
-  const badId = await post("/api/join", { id: "x", lat: 1, lng: 1, incarnationId: uuid() });
+  const badId = await post("/api/join", {
+    id: "x",
+    lat: 1,
+    lng: 1,
+    incarnationId: uuid(),
+  });
   ok("malformed id is 400", badId.status === 400);
 
   const noIncarnation = await post("/api/join", { id: uuid(), lat: 1, lng: 1 });
@@ -766,19 +938,36 @@ section("input validation");
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: "id=1",
   });
-  ok("form content type is 415", wrongType.status === 415, `got ${wrongType.status}`);
+  ok(
+    "form content type is 415",
+    wrongType.status === 415,
+    `got ${wrongType.status}`,
+  );
 
   const huge = await api("/api/join", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: uuid(), lat: 1, lng: 1, incarnationId: uuid(), pad: "A".repeat(200_000) }),
+    body: JSON.stringify({
+      id: uuid(),
+      lat: 1,
+      lng: 1,
+      incarnationId: uuid(),
+      pad: "A".repeat(200_000),
+    }),
   });
   ok("oversized join body is 413", huge.status === 413, `got ${huge.status}`);
 
-  const longUrl = await api(`/api/poll?id=${session.id}&ack=${Array(400).fill(uuid()).join(",")}`, {
-    headers: { "x-pulse-session": session.token },
-  });
-  ok("over-long poll url is rejected", longUrl.status === 414 || longUrl.status === 400, `got ${longUrl.status}`);
+  const longUrl = await api(
+    `/api/poll?id=${session.id}&ack=${Array(400).fill(uuid()).join(",")}`,
+    {
+      headers: { "x-pulse-session": session.token },
+    },
+  );
+  ok(
+    "over-long poll url is rejected",
+    longUrl.status === 414 || longUrl.status === 400,
+    `got ${longUrl.status}`,
+  );
 
   const stranger = await join(2, 2);
   startBeating([stranger]);
@@ -792,18 +981,50 @@ section("input validation");
   await keepAlive(session, stranger);
 
   const badType = await signal(session, stranger.id, "nope", connectionId);
-  ok("unknown signal type is 400", badType.status === 400, `got ${badType.status}`);
+  ok(
+    "unknown signal type is 400",
+    badType.status === 400,
+    `got ${badType.status}`,
+  );
 
-  const selfSignal = await signal(session, session.id, "offer", connectionId, "x");
+  const selfSignal = await signal(
+    session,
+    session.id,
+    "offer",
+    connectionId,
+    "x",
+  );
   ok("self-addressed signal is 400", selfSignal.status === 400);
 
-  const payloadOnRequest = await signal(session, stranger.id, "request", uuid(), "payload");
-  ok("payload on a request is 400", payloadOnRequest.status === 400, `got ${payloadOnRequest.status}`);
+  const payloadOnRequest = await signal(
+    session,
+    stranger.id,
+    "request",
+    uuid(),
+    "payload",
+  );
+  ok(
+    "payload on a request is 400",
+    payloadOnRequest.status === 400,
+    `got ${payloadOnRequest.status}`,
+  );
 
-  const giantSdp = await signal(session, stranger.id, "offer", connectionId, "A".repeat(40_000));
+  const giantSdp = await signal(
+    session,
+    stranger.id,
+    "offer",
+    connectionId,
+    "A".repeat(40_000),
+  );
   ok("oversized sdp is 400", giantSdp.status === 400, `got ${giantSdp.status}`);
 
-  const giantIce = await signal(session, stranger.id, "ice", connectionId, "A".repeat(9_000));
+  const giantIce = await signal(
+    session,
+    stranger.id,
+    "ice",
+    connectionId,
+    "A".repeat(9_000),
+  );
   ok("oversized ice is 400", giantIce.status === 400, `got ${giantIce.status}`);
 
   const nonStringPayload = await post("/api/signal", {
@@ -818,7 +1039,11 @@ section("input validation");
 
   await signal(session, stranger.id, "end", connectionId);
   for (const s of [session, stranger]) {
-    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+    await post("/api/leave", {
+      id: s.id,
+      sessionToken: s.token,
+      incarnationId: s.incarnationId,
+    });
   }
   stopValidationPair();
   stop();
@@ -838,10 +1063,20 @@ section("cross-origin writes");
 
   const sameOrigin = await post(
     "/api/join",
-    { id: session.id, lat: 3, lng: 3, incarnationId: session.incarnationId, sessionToken: session.token },
+    {
+      id: session.id,
+      lat: 3,
+      lng: 3,
+      incarnationId: session.incarnationId,
+      sessionToken: session.token,
+    },
     { Origin: BASE },
   );
-  ok("same-origin join is allowed", sameOrigin.status === 200, `got ${sameOrigin.status}`);
+  ok(
+    "same-origin join is allowed",
+    sameOrigin.status === 200,
+    `got ${sameOrigin.status}`,
+  );
 
   const noOrigin = await post("/api/leave", {
     id: session.id,
@@ -858,7 +1093,10 @@ section("connection lifetime is capped");
   const holder = await join(20, 20);
   const other = await join(21, 21);
   const stop = startBeating([holder, other]);
-  const { connectionId, stop: stopLifetimePair } = await reservePair(holder, other);
+  const { connectionId, stop: stopLifetimePair } = await reservePair(
+    holder,
+    other,
+  );
   ok("the connection under test was reserved", Boolean(connectionId));
   await keepAlive(holder, other);
   await signal(other, holder.id, "accept", connectionId);
@@ -872,7 +1110,11 @@ section("connection lifetime is capped");
   const after = await poll(holder, connectionId);
   ok("poll still works on an over-long connection", after.status === 200);
   const lease = await leaseOf(holder.id);
-  ok("an over-long connection stops renewing its lease", lease <= Date.now() + 5_000, `lease=${lease}`);
+  ok(
+    "an over-long connection stops renewing its lease",
+    lease <= Date.now() + 5_000,
+    `lease=${lease}`,
+  );
 
   // Expire it, as the last renewal would have, and let the reaper notice. The
   // reaper is throttled per instance, so give it the window it needs.
@@ -888,7 +1130,11 @@ section("connection lifetime is capped");
   );
 
   for (const s of [holder, other]) {
-    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+    await post("/api/leave", {
+      id: s.id,
+      sessionToken: s.token,
+      incarnationId: s.incarnationId,
+    });
   }
   stopLifetimePair();
   stop();
@@ -909,7 +1155,11 @@ if (SKIP_ABUSE) {
     const result = await signal(flooder, target.id, "request", uuid());
     if (result.status === 429) cooldownBlocked += 1;
   }
-  ok("request cooldown rate-limits a flood", cooldownBlocked > 0, `${cooldownBlocked}/12 refused`);
+  ok(
+    "request cooldown rate-limits a flood",
+    cooldownBlocked > 0,
+    `${cooldownBlocked}/12 refused`,
+  );
 
   // 2) signalling spam into one mailbox
   const spammer = await join(6, 6);
@@ -917,10 +1167,11 @@ if (SKIP_ABUSE) {
   // Both heartbeated for the whole section: the flood below is sixty concurrent
   // requests, which on a slow link is longer than a presence row's lifetime.
   const stopFlood = startBeating([spammer, victim]);
-  const { connectionId, reserved: first, stop: stopFloodPair } = await reservePair(
-    spammer,
-    victim,
-  );
+  const {
+    connectionId,
+    reserved: first,
+    stop: stopFloodPair,
+  } = await reservePair(spammer, victim);
   ok(
     "mailbox flood has a live connection to flood",
     Boolean(connectionId),
@@ -936,11 +1187,19 @@ if (SKIP_ABUSE) {
   // rather than an error.
   const flood = await Promise.all(
     Array.from({ length: 60 }, (_, i) =>
-      signal(spammer, victim.id, "ice", connectionId, JSON.stringify({ candidate: `c${i}` })),
+      signal(
+        spammer,
+        victim.id,
+        "ice",
+        connectionId,
+        JSON.stringify({ candidate: `c${i}` }),
+      ),
     ),
   );
   const refusedNow = flood.filter((r) => r.status === 429).length;
-  const undecided = flood.filter((r) => r.status !== 200 && r.status !== 429).length;
+  const undecided = flood.filter(
+    (r) => r.status !== 200 && r.status !== 429,
+  ).length;
   ok(
     "a signalling flood gets a definite answer for every request",
     undecided === 0,
@@ -956,7 +1215,11 @@ if (SKIP_ABUSE) {
     `status=${inbox.status} rows=${inbox.body?.signals?.length} body=${JSON.stringify(inbox.body).slice(0, 100)}`,
   );
   for (const s of [spammer, victim]) {
-    await post("/api/leave", { id: s.id, sessionToken: s.token, incarnationId: s.incarnationId });
+    await post("/api/leave", {
+      id: s.id,
+      sessionToken: s.token,
+      incarnationId: s.incarnationId,
+    });
   }
   stopFlood();
   stopFloodPair();
@@ -968,30 +1231,56 @@ if (SKIP_ABUSE) {
   let unauthStatus = null;
   for (let burst = 0; burst < 3; burst += 1) {
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => api(`/api/poll?id=${id}`, {
-        headers: { "x-pulse-session": fakeToken() },
-      })),
+      Array.from({ length: 20 }, () =>
+        api(`/api/poll?id=${id}`, {
+          headers: { "x-pulse-session": fakeToken() },
+        }),
+      ),
     );
     unauthStatus ??= results[0].status;
     refused += results.filter((r) => r.status === 429).length;
   }
-  ok("poll with a wrong token is 401", unauthStatus === 401, `got ${unauthStatus}`);
-  ok("unauthenticated poll flood is rate limited", refused > 0, `${refused}/60 refused`);
+  ok(
+    "poll with a wrong token is 401",
+    unauthStatus === 401,
+    `got ${unauthStatus}`,
+  );
+  ok(
+    "unauthenticated poll flood is rate limited",
+    refused > 0,
+    `${refused}/60 refused`,
+  );
 
   // 4) join flood, from one address
   let joinRefused = 0;
   for (let burst = 0; burst < 3; burst += 1) {
     const results = await Promise.all(
       Array.from({ length: 30 }, () =>
-        post("/api/join", { id: uuid(), lat: 1, lng: 1, incarnationId: uuid() }, { "x-forwarded-for": ABUSE_IP }),
+        post(
+          "/api/join",
+          { id: uuid(), lat: 1, lng: 1, incarnationId: uuid() },
+          { "x-forwarded-for": ABUSE_IP },
+        ),
       ),
     );
     joinRefused += results.filter((r) => r.status === 429).length;
   }
-  ok("join flood is rate limited", joinRefused > 0, `${joinRefused}/90 refused`);
+  ok(
+    "join flood is rate limited",
+    joinRefused > 0,
+    `${joinRefused}/90 refused`,
+  );
 
-  await post("/api/leave", { id: flooder.id, sessionToken: flooder.token, incarnationId: flooder.incarnationId });
-  await post("/api/leave", { id: target.id, sessionToken: target.token, incarnationId: target.incarnationId });
+  await post("/api/leave", {
+    id: flooder.id,
+    sessionToken: flooder.token,
+    incarnationId: flooder.incarnationId,
+  });
+  await post("/api/leave", {
+    id: target.id,
+    sessionToken: target.token,
+    incarnationId: target.incarnationId,
+  });
   stop();
 }
 
@@ -1001,7 +1290,12 @@ section("error responses leak nothing");
   const responses = [
     await api(`/api/poll?id=${uuid()}`),
     await post("/api/join", { id: "nope" }),
-    await post("/api/signal", { fromId: uuid(), toId: uuid(), type: "offer", connectionId: uuid() }),
+    await post("/api/signal", {
+      fromId: uuid(),
+      toId: uuid(),
+      type: "offer",
+      connectionId: uuid(),
+    }),
   ];
   for (const response of responses) {
     const text = JSON.stringify(response.body);
@@ -1014,7 +1308,11 @@ section("error responses leak nothing");
     );
   }
   const bad = responses[0];
-  ok("unknown session is 401 or 400, never 500", bad.status === 401 || bad.status === 400, `got ${bad.status}`);
+  ok(
+    "unknown session is 401 or 400, never 500",
+    bad.status === 401 || bad.status === 400,
+    `got ${bad.status}`,
+  );
 }
 
 // --- 12. Response headers -------------------------------------------------
@@ -1024,26 +1322,42 @@ section("response hardening");
   const csp = page.headers.get("content-security-policy") ?? "";
   ok("page sends a content-security-policy", csp.length > 0);
   ok("CSP forbids framing", csp.includes("frame-ancestors 'none'"));
-  ok("CSP forbids plugins and base-uri tricks", csp.includes("object-src 'none'") && csp.includes("base-uri 'none'"));
+  ok(
+    "CSP forbids plugins and base-uri tricks",
+    csp.includes("object-src 'none'") && csp.includes("base-uri 'none'"),
+  );
   ok("CSP restricts form posts to us", csp.includes("form-action 'self'"));
   ok(
     "CSP allows the origins Mapbox GL needs and nothing else",
-    csp.includes("https://api.mapbox.com") && csp.includes("blob:") && !csp.includes("*;"),
+    csp.includes("https://api.mapbox.com") &&
+      csp.includes("blob:") &&
+      !csp.includes("*;"),
     csp.slice(0, 160),
   );
-  ok("nosniff is set", page.headers.get("x-content-type-options") === "nosniff");
+  ok(
+    "nosniff is set",
+    page.headers.get("x-content-type-options") === "nosniff",
+  );
   ok("frames are denied", page.headers.get("x-frame-options") === "DENY");
-  ok("no referrer leaves the app", page.headers.get("referrer-policy") === "no-referrer");
+  ok(
+    "no referrer leaves the app",
+    page.headers.get("referrer-policy") === "no-referrer",
+  );
   const perms = page.headers.get("permissions-policy") ?? "";
   ok(
     "camera, mic and location are same-origin only",
-    perms.includes("camera=(self)") && perms.includes("microphone=(self)") && perms.includes("geolocation=(self)"),
+    perms.includes("camera=(self)") &&
+      perms.includes("microphone=(self)") &&
+      perms.includes("geolocation=(self)"),
     perms,
   );
   ok("framework is not advertised", !page.headers.get("x-powered-by"));
 
   const apiResponse = await api(`/api/poll?id=${uuid()}`);
-  ok("api responses are not cacheable", apiResponse.headers.get("cache-control")?.includes("no-store"));
+  ok(
+    "api responses are not cacheable",
+    apiResponse.headers.get("cache-control")?.includes("no-store"),
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

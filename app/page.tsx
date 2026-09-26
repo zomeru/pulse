@@ -13,13 +13,7 @@ import TopBar, { type FlowStage } from "./components/TopBar";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useVisualViewportVar } from "./hooks/useVisualViewport";
 import { useEscapeKey } from "./hooks/useEscapeKey";
-import {
-  ApiError,
-  join,
-  leave,
-  poll,
-  sendSignal,
-} from "@/lib/api";
+import { ApiError, join, leave, poll, sendSignal } from "@/lib/api";
 import { PeerSession, type DescType, type PeerControl } from "@/lib/webrtc";
 import { distanceKm, formatKm } from "@/lib/geo";
 import { waveColor } from "@/lib/presence-colors";
@@ -79,10 +73,7 @@ function isActiveConnection(conn: Conn): conn is ActiveConn {
   return conn.kind !== "idle";
 }
 
-function matchesConnection(
-  conn: Conn,
-  expected: ConnectionRef,
-): boolean {
+function matchesConnection(conn: Conn, expected: ConnectionRef): boolean {
   return (
     isActiveConnection(conn) &&
     conn.peerId === expected.peerId &&
@@ -107,12 +98,15 @@ export default function Home() {
   const [notices, setNotices] = useState<Notice[]>([]);
   const [sync, setSync] = useState<"live" | "reconnecting">("live");
   const [peerTyping, setPeerTyping] = useState(false);
-  const [mediaError, setMediaError] = useState<"caller" | "callee" | null>(null);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(
+  const [mediaError, setMediaError] = useState<"caller" | "callee" | null>(
     null,
   );
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [myLocation, setMyLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
 
   const [conn, setConnState] = useState<Conn>({ kind: "idle" });
   const connRef = useRef<Conn>(conn);
@@ -155,7 +149,9 @@ export default function Home() {
   const requestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const missingPeerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const peerDisconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peerDisconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const videoRequestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noticeSeq = useRef(0);
@@ -167,9 +163,7 @@ export default function Home() {
   const endedConnections = useRef(new Set<string>());
   const processedSignals = useRef(new Map<string, number>());
   const pendingSignalAcks = useRef<string[]>([]);
-  const terminalTimers = useRef(
-    new Set<ReturnType<typeof setTimeout>>(),
-  );
+  const terminalTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
 
   const dismissNotice = useCallback((id: number) => {
     setNotices((previous) => previous.filter((n) => n.id !== id));
@@ -258,11 +252,10 @@ export default function Home() {
       : null;
   }
 
-  function isCurrentPeer(
-    peer: PeerSession,
-    expected: ConnectionRef,
-  ): boolean {
-    return peerRef.current === peer && matchesConnection(connRef.current, expected);
+  function isCurrentPeer(peer: PeerSession, expected: ConnectionRef): boolean {
+    return (
+      peerRef.current === peer && matchesConnection(connRef.current, expected)
+    );
   }
 
   function clearTerminalTimers() {
@@ -353,10 +346,13 @@ export default function Home() {
           if (error instanceof ApiError && error.isTerminal) return;
           if (attempt < 2) {
             await new Promise<void>((resolve) => {
-              const timer = setTimeout(() => {
-                terminalTimers.current.delete(timer);
-                resolve();
-              }, 250 * (attempt + 1));
+              const timer = setTimeout(
+                () => {
+                  terminalTimers.current.delete(timer);
+                  resolve();
+                },
+                250 * (attempt + 1),
+              );
               terminalTimers.current.add(timer);
             });
           }
@@ -412,11 +408,7 @@ export default function Home() {
     return true;
   }
 
-  function startPeer(
-    peerId: string,
-    initiator: boolean,
-    connectionId: string,
-  ) {
+  function startPeer(peerId: string, initiator: boolean, connectionId: string) {
     const expected = { peerId, connectionId };
     let disconnected = false;
     const peer = new PeerSession(initiator, {
@@ -495,7 +487,10 @@ export default function Home() {
 
     switch (ctrl) {
       case "video-request":
-        if (videoRef.current === "none" && isActiveConnection(connRef.current)) {
+        if (
+          videoRef.current === "none" &&
+          isActiveConnection(connRef.current)
+        ) {
           // We are no longer the one waiting.
           clearVideoRequestTimer();
           setMediaError(null);
@@ -659,7 +654,10 @@ export default function Home() {
     setVideo("requesting");
     if (!peer.sendControl("video-request")) {
       setVideo("none");
-      showNotice("The call couldn't be started. Try again in a moment.", "error");
+      showNotice(
+        "The call couldn't be started. Try again in a moment.",
+        "error",
+      );
       return;
     }
     // Without this the UI would sit on "waiting" forever if the other side
@@ -1065,7 +1063,8 @@ export default function Home() {
     if (!peersSeen.current) return;
     const present = new Set(peers.map((peer) => peer.id));
     setWaves((prev) => {
-      const link = prev.link && present.has(prev.link.peerId) ? prev.link : null;
+      const link =
+        prev.link && present.has(prev.link.peerId) ? prev.link : null;
       const inbox = prev.inbox.filter((id) => present.has(id));
       if (link === prev.link && inbox.length === prev.inbox.length) return prev;
       return { link, inbox };
@@ -1266,7 +1265,8 @@ export default function Home() {
   const mapTarget = isActiveConnection(conn)
     ? {
         peerId: conn.peerId,
-        state: conn.kind === "connected" ? ("linked" as const) : ("target" as const),
+        state:
+          conn.kind === "connected" ? ("linked" as const) : ("target" as const),
       }
     : null;
 

@@ -130,7 +130,8 @@ export async function POST(request: NextRequest) {
     const body = await readJsonObject(request, MAX_BODY_BYTES);
     if (!body.ok) return body.response;
 
-    const { fromId, toId, type, connectionId, sessionToken, payload } = body.value;
+    const { fromId, toId, type, connectionId, sessionToken, payload } =
+      body.value;
 
     if (!isSessionId(fromId) || !isSessionId(toId) || fromId === toId) {
       return apiError(400, "invalid_ids");
@@ -274,7 +275,9 @@ export async function POST(request: NextRequest) {
         fromId,
         signalType,
       );
-      return jsonResponse(terminated.refused ? { ok: true, ignored: true } : { ok: true });
+      return jsonResponse(
+        terminated.refused ? { ok: true, ignored: true } : { ok: true },
+      );
     } else if (
       !(await connectionIsActive(fromId, toId, scopedConnectionId as string))
     ) {

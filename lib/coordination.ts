@@ -46,10 +46,7 @@ function isFresh(lastSeen: Date, staleCutoff: Date): boolean {
   return lastSeen.getTime() >= staleCutoff.getTime();
 }
 
-function hasLiveLease(
-  connectionExpiresAt: Date | null,
-  now: number,
-): boolean {
+function hasLiveLease(connectionExpiresAt: Date | null, now: number): boolean {
   return connectionExpiresAt !== null && connectionExpiresAt.getTime() > now;
 }
 
@@ -204,7 +201,9 @@ export async function reserveConnection({
     return "declined";
   }
 
-  return targetAlreadyReserved || sourceAlreadyReserved ? "already" : "reserved";
+  return targetAlreadyReserved || sourceAlreadyReserved
+    ? "already"
+    : "reserved";
 }
 
 /**
@@ -314,7 +313,9 @@ export async function trimMailbox(
  * expired. Polling is the heartbeat in this architecture, so this function is
  * the TTL fallback for crashes, power loss, and missed unload events.
  */
-export async function reapStaleConnections(now = Date.now()): Promise<TerminationResult[]> {
+export async function reapStaleConnections(
+  now = Date.now(),
+): Promise<TerminationResult[]> {
   const staleCutoff = new Date(now - STALE_MS);
   const signalCutoff = new Date(now - SIGNAL_TTL_MS);
   const terminated: TerminationResult[] = [];

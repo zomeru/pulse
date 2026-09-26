@@ -506,7 +506,8 @@
 
   .pulse-orbit::before {
     inset: 0;
-    border: 1px solid color-mix(in oklab, var(--tone, var(--color-signal)) 55%, transparent);
+    border: 1px solid
+      color-mix(in oklab, var(--tone, var(--color-signal)) 55%, transparent);
     animation: beacon-breathe 2.6s var(--ease-in-out-soft) infinite;
   }
 
@@ -639,7 +640,11 @@
 }
 
 .mapboxgl-ctrl-attrib-inner {
-  background: color-mix(in oklab, var(--color-void) 78%, transparent) !important;
+  background: color-mix(
+    in oklab,
+    var(--color-void) 78%,
+    transparent
+  ) !important;
   border-radius: 0 0.5rem 0 0 !important;
   font-size: 10px !important;
   font-family: var(--font-sans);
@@ -693,7 +698,11 @@
 }
 
 .mapboxgl-ctrl-group {
-  background: color-mix(in oklab, var(--color-surface) 82%, transparent) !important;
+  background: color-mix(
+    in oklab,
+    var(--color-surface) 82%,
+    transparent
+  ) !important;
   border: 1px solid var(--color-hairline-soft) !important;
   border-radius: 0.75rem !important;
   box-shadow: none !important;

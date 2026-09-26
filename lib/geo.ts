@@ -92,4 +92,3 @@ export function formatKm(km: number): string {
   const rounded = Math.max(step, Math.round(km / step) * step);
   return String(rounded).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
-

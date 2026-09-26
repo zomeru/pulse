@@ -108,10 +108,7 @@ export class PeerSession {
         const message = JSON.parse(event.data as string);
         if (message.t === "chat" && typeof message.text === "string") {
           this.cb.onChat(message.text);
-        } else if (
-          message.t === "ctrl" &&
-          typeof message.ctrl === "string"
-        ) {
+        } else if (message.t === "ctrl" && typeof message.ctrl === "string") {
           this.cb.onControl(message.ctrl as PeerControl);
         }
       } catch {

@@ -74,13 +74,15 @@ export default function VideoPanel({
   function toggleMute() {
     const next = !muted;
     setMuted(next);
-    for (const track of localStream?.getAudioTracks() ?? []) track.enabled = !next;
+    for (const track of localStream?.getAudioTracks() ?? [])
+      track.enabled = !next;
   }
 
   function toggleCamera() {
     const next = !cameraOff;
     setCameraOff(next);
-    for (const track of localStream?.getVideoTracks() ?? []) track.enabled = !next;
+    for (const track of localStream?.getVideoTracks() ?? [])
+      track.enabled = !next;
   }
 
   const clock = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(
@@ -94,10 +96,13 @@ export default function VideoPanel({
       aria-label="Video call"
     >
       {/* Call header */}
-      <header
-        className="flex shrink-0 items-center gap-3 px-4 pb-3 pt-[max(0.875rem,var(--safe-t))]"
-      >
-        <span className="pulse-orbit shrink-0" data-busy="false" aria-hidden="true" style={{ width: "1.75rem", height: "1.75rem" }} />
+      <header className="flex shrink-0 items-center gap-3 px-4 pb-3 pt-[max(0.875rem,var(--safe-t))]">
+        <span
+          className="pulse-orbit shrink-0"
+          data-busy="false"
+          aria-hidden="true"
+          style={{ width: "1.75rem", height: "1.75rem" }}
+        />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-medium leading-tight text-ink">
             Stranger
@@ -135,7 +140,11 @@ export default function VideoPanel({
         {!remoteStream && (
           <div className="absolute inset-0 grid place-items-center px-8">
             <div className="flex flex-col items-center gap-4 text-center">
-              <span className="pulse-orbit" data-busy="true" aria-hidden="true" />
+              <span
+                className="pulse-orbit"
+                data-busy="true"
+                aria-hidden="true"
+              />
               <div>
                 <p className="text-sm font-medium text-ink">
                   Waiting for their camera

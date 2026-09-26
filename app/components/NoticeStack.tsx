@@ -62,9 +62,7 @@ function Toast({
       <span
         className={cn(
           "grid h-5 w-5 shrink-0 place-items-center rounded-full",
-          isError
-            ? "bg-alert/15 text-alert"
-            : "bg-signal/15 text-signal",
+          isError ? "bg-alert/15 text-alert" : "bg-signal/15 text-signal",
         )}
         aria-hidden="true"
       >

@@ -38,7 +38,9 @@ export function isIncarnationId(value: unknown): value is string {
 }
 
 export function isSignalType(value: unknown): value is SignalType {
-  return typeof value === "string" && SIGNAL_TYPES.includes(value as SignalType);
+  return (
+    typeof value === "string" && SIGNAL_TYPES.includes(value as SignalType)
+  );
 }
 
 /**

@@ -25,13 +25,7 @@ const WAVE_TRAVEL_MS = 1150;
 const WAVE_BOW_RATIO = 0.16;
 const WAVE_BOW_MAX = 18;
 
-type MarkerState =
-  | "idle"
-  | "busy"
-  | "target"
-  | "linked"
-  | "waving"
-  | "mutual";
+type MarkerState = "idle" | "busy" | "target" | "linked" | "waving" | "mutual";
 
 /** What the map needs to know about waves. Deliberately not the whole state
  *  machine: the map draws threads, the app decides whether they are real. */
@@ -213,7 +207,7 @@ function waveArc(
 
   return [
     [from.lng, from.lat],
-    [(((midLng + 180) % 360) + 360) % 360 - 180, midLat],
+    [((((midLng + 180) % 360) + 360) % 360) - 180, midLat],
     [endLng, to.lat],
   ];
 }
@@ -366,7 +360,10 @@ export default function WorldMap({
       // recentre go top-left for the same reason: on desktop the conversation
       // owns the right third of the screen. Recentre is added first because
       // Mapbox appends, which puts it above the zoom-in button.
-      map.addControl(new gl.AttributionControl({ compact: true }), "bottom-left");
+      map.addControl(
+        new gl.AttributionControl({ compact: true }),
+        "bottom-left",
+      );
       map.addControl(
         new gl.ScaleControl({ maxWidth: 80, unit: "metric" }),
         "bottom-left",
@@ -388,7 +385,10 @@ export default function WorldMap({
       const waveControl = new WaveControl(() => onToggleWave());
       waveControlRef.current = waveControl;
       map.addControl(waveControl, "top-left");
-      map.addControl(new gl.NavigationControl({ showCompass: false }), "top-left");
+      map.addControl(
+        new gl.NavigationControl({ showCompass: false }),
+        "top-left",
+      );
 
       map.on("error", (event) => {
         // A single tile 404 must not blank the whole planet; only a failure
@@ -725,7 +725,8 @@ export default function WorldMap({
         // the map react for the person who waved and sit still for the person
         // who was waved at, which is the wrong way round — this is the light that
         // just arrived, and the map should be the first place you see it.
-        const isWavingIn = !isLink && thread?.incoming.includes(peer.id) === true;
+        const isWavingIn =
+          !isLink && thread?.incoming.includes(peer.id) === true;
         const state: MarkerState = isLink
           ? thread.link?.mutual
             ? "mutual"
@@ -918,7 +919,12 @@ export default function WorldMap({
       // staying lit: a wave needs no answer, and a line that keeps asking is a
       // line the map should not draw.
       waveFrame.current = null;
-      setPaint(map, `${WAVE_SOURCE}-core`, "line-opacity", mutual ? 0.62 : 0.34);
+      setPaint(
+        map,
+        `${WAVE_SOURCE}-core`,
+        "line-opacity",
+        mutual ? 0.62 : 0.34,
+      );
       setPaint(map, `${WAVE_SOURCE}-glow`, "line-opacity", mutual ? 0.4 : 0.16);
     };
     waveFrame.current = requestAnimationFrame(step);
@@ -1017,8 +1023,8 @@ export default function WorldMap({
               <code className="rounded bg-void/70 px-1 py-0.5 font-mono text-xs text-signal">
                 NEXT_PUBLIC_MAPBOX_TOKEN
               </code>{" "}
-              in <code className="font-mono text-xs">.env</code> and restart. Chat
-              and video still work without it.
+              in <code className="font-mono text-xs">.env</code> and restart.
+              Chat and video still work without it.
             </p>
           </div>
         </div>

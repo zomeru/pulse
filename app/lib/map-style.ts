@@ -133,7 +133,10 @@ export function restyleMap(map: MapboxMap): void {
       continue;
     }
 
-    if (type === "line" && (id === "land-structure-line" || id === "aeroway-line")) {
+    if (
+      type === "line" &&
+      (id === "land-structure-line" || id === "aeroway-line")
+    ) {
       hide(map, id);
       continue;
     }
