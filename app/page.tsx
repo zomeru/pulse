@@ -1072,10 +1072,15 @@ export default function Home() {
     });
   }, [peers, setWaves]);
 
-  // Escape puts the map back to what it does normally. Not while a wave card is
-  // up: there, Escape answers the card, and two answers to one keypress is how
-  // a user ends up dismissing the wrong thing.
-  useEscapeKey(    conn.kind === "idle" && waves.inbox.length === 0 && cancelable,
+  // Escape puts the map back to what it does normally — and answers a wave card
+  // before it does anything else. Not while a card is up: there, Escape belongs
+  // to the card, and two answers to one keypress is how a user ends up dismissing
+  // the wrong thing.
+  const waveCardShowing =
+    conn.kind === "idle" &&
+    (waves.inbox.length > 0 || Boolean(waves.link?.mutual));
+  useEscapeKey(
+    conn.kind === "idle" && !waveCardShowing && cancelable,
     cancelWaving,
   );
 

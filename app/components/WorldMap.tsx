@@ -719,16 +719,24 @@ export default function WorldMap({
         // this dot is to us right now.
         const thread = waveRef.current;
         const isLink = thread?.link?.peerId === peer.id;
-        const isWavingIn = thread?.incoming.includes(peer.id) === true;
+        // A wave that has arrived and not been answered looks exactly like one
+        // that has been sent and not come back: there is a wave between these two
+        // dots and no answer is due. Drawing only the sender's side would make
+        // the map react for the person who waved and sit still for the person
+        // who was waved at, which is the wrong way round — this is the light that
+        // just arrived, and the map should be the first place you see it.
+        const isWavingIn = !isLink && thread?.incoming.includes(peer.id) === true;
         const state: MarkerState = isLink
           ? thread.link?.mutual
             ? "mutual"
             : "waving"
-          : active?.peerId === peer.id
-            ? active.state
-            : !canConnectRef.current || peer.busy
-              ? "busy"
-              : "idle";
+          : isWavingIn
+            ? "waving"
+            : active?.peerId === peer.id
+              ? active.state
+              : !canConnectRef.current || peer.busy
+                ? "busy"
+                : "idle";
 
         if (entry.state !== state || entry.armed !== thread?.armed) {
           entry.state = state;
@@ -738,7 +746,7 @@ export default function WorldMap({
           // The wave colour both ends derive from the same two ids, so the two
           // markers on two screens are the same light. Only meaningful when a
           // thread exists; otherwise the marker keeps its own beacon colour.
-          if (isLink) {
+          if (isLink || isWavingIn) {
             entry.element.style.setProperty(
               "--wave",
               waveColor(selfId, peer.id),
@@ -919,10 +927,14 @@ export default function WorldMap({
   // The tool's armed state and its waiting badge. Kept out of the map's init
   // effect so arming costs no re-initialisation and no listener. The container
   // class is how every available dot learns it is waveable.
+  //
+  // `ready` is in the dependencies because the control is created inside the map
+  // init: without it, the first `set` can land before the control exists and be
+  // never retried.
   useEffect(() => {
     waveControlRef.current?.set(wave.armed, wave.incoming.length);
     containerRef.current?.classList.toggle("pulse-wave-armed", wave.armed);
-  }, [wave]);
+  }, [wave, ready]);
 
   // Frame both ends of a live connection. This is a deliberate camera move on a
   // real state change, not a hijack: without it, accepting a request from
